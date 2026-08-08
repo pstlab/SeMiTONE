@@ -771,6 +771,50 @@ mod tests {
     }
 
     #[test]
+    fn test_constant_arithmetic_evaluations() {
+        let mut solver = SmtSolver::new();
+
+        assert!(solver.assert(&lt(cst_arith(5), cst_arith(10))).is_ok());
+        assert!(solver.assert(&le(cst_arith(5), cst_arith(5))).is_ok());
+        assert!(solver.assert(&ge(cst_arith(10), cst_arith(5))).is_ok());
+        assert!(solver.assert(&gt(cst_arith(10), cst_arith(5))).is_ok());
+
+        assert!(solver.assert(&lt(cst_arith(10), cst_arith(5))).is_err());
+        assert!(solver.assert(&le(cst_arith(10), cst_arith(5))).is_err());
+        assert!(solver.assert(&ge(cst_arith(5), cst_arith(10))).is_err());
+        assert!(solver.assert(&gt(cst_arith(5), cst_arith(10))).is_err());
+
+        assert!(solver.assert(&!lt(cst_arith(10), cst_arith(5))).is_ok());
+        assert!(solver.assert(&!lt(cst_arith(5), cst_arith(10))).is_err());
+    }
+
+    #[test]
+    fn test_negated_variable_inequalities() {
+        let mut solver = SmtSolver::new();
+        let x = solver.new_real();
+
+        solver.push();
+        assert!(solver.assert(&!lt(x.clone(), cst_arith(5))).is_ok());
+        assert!(solver.assert(&lt(x.clone(), cst_arith(4))).is_err());
+        solver.pop();
+
+        solver.push();
+        assert!(solver.assert(&!le(x.clone(), cst_arith(5))).is_ok());
+        assert!(solver.assert(&le(x.clone(), cst_arith(5))).is_err());
+        solver.pop();
+
+        solver.push();
+        assert!(solver.assert(&!ge(x.clone(), cst_arith(5))).is_ok());
+        assert!(solver.assert(&ge(x.clone(), cst_arith(5))).is_err());
+        solver.pop();
+
+        solver.push();
+        assert!(solver.assert(&!gt(x.clone(), cst_arith(5))).is_ok());
+        assert!(solver.assert(&gt(x.clone(), cst_arith(5))).is_err());
+        solver.pop();
+    }
+
+    #[test]
     fn test_dpllt_backtracking_over_theory() {
         let mut solver = SmtSolver::new();
         let x = solver.new_real();
