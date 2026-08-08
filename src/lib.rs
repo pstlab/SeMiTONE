@@ -815,6 +815,65 @@ mod tests {
     }
 
     #[test]
+    fn test_tseitin_nested_boolean_logic() {
+        let mut solver = SmtSolver::new();
+        let a = solver.new_bool();
+        let b = solver.new_bool();
+
+        let nested_and = and([a.clone(), b.clone()]);
+        let nested_or = or([!a.clone(), BoolExpr::False]);
+
+        let root_or = or([nested_and, nested_or, BoolExpr::True]);
+
+        assert!(solver.assert(&root_or).is_ok());
+        assert!(solver.check_sat());
+    }
+
+    #[test]
+    fn test_tseitin_nested_theory_atoms() {
+        let mut solver = SmtSolver::new();
+        let x = solver.new_real();
+
+        let atom_lt = lt(x.clone(), cst_arith(5));
+        let atom_ge = ge(x.clone(), cst_arith(10));
+        let atom_le = le(x.clone(), cst_arith(0));
+        let atom_gt = gt(x.clone(), cst_arith(20));
+
+        let disjunction1 = or([atom_lt, atom_ge]);
+        let disjunction2 = or([atom_le, atom_gt]);
+
+        assert!(solver.assert(&disjunction1).is_ok());
+        assert!(solver.assert(&disjunction2).is_ok());
+        assert!(solver.check_sat());
+    }
+
+    #[test]
+    fn test_encode_eq_booleans() {
+        let mut solver = SmtSolver::new();
+        let a = solver.new_bool();
+        let b = solver.new_bool();
+
+        let eq_expr = BoolExpr::Eq(Box::new(Expr::Bool(a.clone())), Box::new(Expr::Bool(b.clone())));
+
+        assert!(solver.assert(&and([eq_expr, a])).is_ok());
+        assert!(solver.check_sat());
+
+        assert_eq!(solver.get_bool_val(&b), Some(true));
+    }
+
+    #[test]
+    #[should_panic(expected = "Type mismatch in Eq")]
+    fn test_encode_eq_type_mismatch_panic() {
+        let mut solver = SmtSolver::new();
+        let a = solver.new_bool();
+        let x = solver.new_real();
+
+        let bad_eq = BoolExpr::Eq(Box::new(Expr::Bool(a)), Box::new(Expr::Arith(x)));
+
+        let _ = solver.assert(&bad_eq);
+    }
+
+    #[test]
     fn test_dpllt_backtracking_over_theory() {
         let mut solver = SmtSolver::new();
         let x = solver.new_real();
