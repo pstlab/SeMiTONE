@@ -7,8 +7,8 @@ description = "SeMiTONE is a Satisfiability Modulo TheOries NEtwork, allowing th
 readme = "README.md"
 repository = "https://github.com/pstlab/SeMiTONE"
 license-file = "LICENSE"
-keywords = ["satisfiability-modulo-theories", "smt"]
-categories = []
+keywords = ["smt", "solver", "dpllt", "logic", "optimization"]
+categories = ["algorithms", "mathematics", "science"]
 
 [lib]
 name = "semitone"
