@@ -55,6 +55,7 @@ impl SatSolver {
     }
 
     pub(super) fn push(&mut self) {
+        assert!(self.prop_q.is_empty(), "Cannot push decision level while propagation queue is not empty");
         self.trail_lim.push(self.trail.len());
         trace!("Pushed decision level {}", self.decision_level());
     }
@@ -410,6 +411,8 @@ mod tests {
         sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]).expect("Should be able to add clause");
         sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]).expect("Should be able to add clause");
         sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]).expect("Should be able to add clause");
+
+        sat.propagate().expect("Should be able to propagate without conflicts");
 
         // Decision: ¬b7
         decide(&mut sat, Lit::new(b7, true)).expect("Should be able to decide ¬b7");
