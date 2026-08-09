@@ -19,7 +19,8 @@ fn bench_smt_parser_simple_lra(c: &mut Criterion) {
         b.iter(|| {
             // We instantiate a new parser inside the loop to ensure
             // a completely fresh SMT state for every iteration.
-            let mut runner = SmtParser::new();
+            let mut sink = std::io::sink();
+            let mut runner = SmtParser::new(&mut sink);
 
             // black_box prevents the compiler from optimizing away the string
             runner.run_str(black_box(script));
@@ -73,7 +74,8 @@ fn bench_smt_parser_logistics(c: &mut Criterion) {
 
     c.bench_function("parse_and_solve_logistics", |b| {
         b.iter(|| {
-            let mut runner = SmtParser::new();
+            let mut sink = std::io::sink();
+            let mut runner = SmtParser::new(&mut sink);
             runner.run_str(black_box(script));
         })
     });

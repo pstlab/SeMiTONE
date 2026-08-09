@@ -7,6 +7,7 @@ fn main() {
         return;
     }
 
-    let mut runner = semitone::parser::SmtParser::new();
+    let mut stdout = std::io::stdout();
+    let mut runner = semitone::parser::SmtParser::new(&mut stdout);
     runner.run_file(&args[1]);
 }

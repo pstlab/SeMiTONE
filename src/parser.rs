@@ -5,28 +5,28 @@ use crate::{
 };
 use num_traits::ToPrimitive;
 use smt2parser::{CommandStream, concrete};
-use std::{collections::HashMap, fs::File, io::BufReader};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufReader, Write},
+};
 
-pub struct SmtParser {
+pub struct SmtParser<'a> {
     pub solver: SmtSolver,
     bool_vars: HashMap<String, BoolExpr>,
     real_vars: HashMap<String, ArithExpr>,
     is_unsat: bool,
+    writer: &'a mut dyn Write,
 }
 
-impl Default for SmtParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SmtParser {
-    pub fn new() -> Self {
+impl<'a> SmtParser<'a> {
+    pub fn new(writer: &'a mut dyn Write) -> Self {
         Self {
             solver: SmtSolver::new(),
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
             is_unsat: false,
+            writer,
         }
     }
 
@@ -100,25 +100,25 @@ impl SmtParser {
             }
             concrete::Command::CheckSat => {
                 if self.is_unsat {
-                    println!("unsat");
+                    writeln!(self.writer, "unsat").unwrap();
                 } else if self.solver.check_sat() {
-                    println!("sat");
+                    writeln!(self.writer, "sat").unwrap();
                 } else {
-                    println!("unsat");
+                    writeln!(self.writer, "unsat").unwrap();
                 }
             }
             concrete::Command::GetModel => {
                 if self.is_unsat {
-                    println!("(error \"get-model is only available after a successful check-sat\")");
+                    writeln!(self.writer, "(error \"get-model is only available after a successful check-sat\")").unwrap();
                     return;
                 }
 
-                println!("(");
+                writeln!(self.writer, "(").unwrap();
 
                 // Print Boolean assignments
                 for (name, var) in &self.bool_vars {
                     if let Some(val) = self.solver.get_bool_val(var) {
-                        println!("  (define-fun {} () Bool {})", name, if val { "true" } else { "false" });
+                        writeln!(self.writer, "  (define-fun {} () Bool {})", name, if val { "true" } else { "false" }).unwrap();
                     }
                 }
 
@@ -126,7 +126,7 @@ impl SmtParser {
                 for (name, var) in &self.real_vars {
                     if let Some(val) = self.solver.get_arith_val(var) {
                         let Rational::Finite(rat) = val.rational_part() else {
-                            println!("  (define-fun {} () Real <non-finite>)", name);
+                            writeln!(self.writer, "  (define-fun {} () Real <non-finite>)", name).unwrap();
                             continue;
                         };
                         let num = rat.numer();
@@ -134,14 +134,14 @@ impl SmtParser {
 
                         // Format as decimal if the denominator is 1, otherwise as an SMT-LIB division
                         if den == &rug::Integer::from(1) {
-                            println!("  (define-fun {} () Real {}.0)", name, num);
+                            writeln!(self.writer, "  (define-fun {} () Real {}.0)", name, num).unwrap();
                         } else {
-                            println!("  (define-fun {} () Real (/ {} {}))", name, num, den);
+                            writeln!(self.writer, "  (define-fun {} () Real (/ {} {}))", name, num, den).unwrap();
                         }
                     }
                 }
 
-                println!(")");
+                writeln!(self.writer, ")").unwrap();
             }
             concrete::Command::Push { level } => {
                 let n = level.to_usize().unwrap_or_else(|| panic!("push level too large for usize: {}", level));
