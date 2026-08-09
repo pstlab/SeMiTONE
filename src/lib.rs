@@ -1,6 +1,8 @@
 pub mod ast;
 mod enum_theory;
 mod lra_theory;
+#[cfg(feature = "parser")]
+pub mod parser;
 mod proxy;
 mod rational;
 mod sat_solver;
