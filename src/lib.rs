@@ -146,14 +146,14 @@ impl SmtSolver {
                     } else {
                         let lt_lit = self.mk_le(a1, a2, true);
                         let gt_lit = self.mk_ge(a1, a2, true);
-                        self.sat_solver.add_clause(vec![lt_lit, gt_lit]).is_ok()
+                        self.sat_solver.add_clause([lt_lit, gt_lit]).is_ok()
                     }
                 } else {
                     let mut lit = self.encode_eq(e1, e2);
                     if !polarity {
                         lit = !lit;
                     }
-                    self.sat_solver.add_clause(vec![lit]).is_ok()
+                    self.sat_solver.add_clause([lit]).is_ok()
                 }
             }
             _ => {
@@ -161,7 +161,7 @@ impl SmtSolver {
                 if !polarity {
                     lit = !lit;
                 }
-                self.sat_solver.add_clause(vec![lit]).is_ok()
+                self.sat_solver.add_clause([lit]).is_ok()
             }
         }
     }
@@ -182,7 +182,7 @@ impl SmtSolver {
                 let proxy_lit = Lit::new(proxy_var, true);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause(vec![!proxy_lit, lit]).expect("Failed to add clause");
+                    self.sat_solver.add_clause([!proxy_lit, lit]).expect("Failed to add clause");
                 }
 
                 let mut big_clause: Vec<Lit> = lits.into_iter().map(|l| !l).collect();
@@ -201,7 +201,7 @@ impl SmtSolver {
                 let proxy_lit = Lit::new(proxy_var, true);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause(vec![!lit, proxy_lit]).expect("Failed to add clause");
+                    self.sat_solver.add_clause([!lit, proxy_lit]).expect("Failed to add clause");
                 }
 
                 let mut big_clause = lits;
@@ -227,10 +227,10 @@ impl SmtSolver {
                 let proxy_var = self.sat_solver.mk_var();
                 let p = Lit::new(proxy_var, true);
 
-                self.sat_solver.add_clause(vec![!p, l1, !l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause(vec![!p, !l1, l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause(vec![p, l1, l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause(vec![p, !l1, !l2]).expect("Failed to add clause");
+                self.sat_solver.add_clause([!p, l1, !l2]).expect("Failed to add clause");
+                self.sat_solver.add_clause([!p, !l1, l2]).expect("Failed to add clause");
+                self.sat_solver.add_clause([p, l1, l2]).expect("Failed to add clause");
+                self.sat_solver.add_clause([p, !l1, !l2]).expect("Failed to add clause");
 
                 p
             }
@@ -270,9 +270,9 @@ impl SmtSolver {
                     let and_proxy_var = self.sat_solver.mk_var();
                     let and_proxy = Lit::new(and_proxy_var, false);
 
-                    self.sat_solver.add_clause(vec![!and_proxy, p1]).unwrap();
-                    self.sat_solver.add_clause(vec![!and_proxy, p2]).unwrap();
-                    self.sat_solver.add_clause(vec![!p1, !p2, and_proxy]).unwrap();
+                    self.sat_solver.add_clause([!and_proxy, p1]).unwrap();
+                    self.sat_solver.add_clause([!and_proxy, p2]).unwrap();
+                    self.sat_solver.add_clause([!p1, !p2, and_proxy]).unwrap();
 
                     lits.push(and_proxy);
                 }
@@ -281,7 +281,7 @@ impl SmtSolver {
                 let or_proxy = Lit::new(or_proxy_var, false);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause(vec![!lit, or_proxy]).unwrap();
+                    self.sat_solver.add_clause([!lit, or_proxy]).unwrap();
                 }
 
                 let mut big_clause = lits;
@@ -330,11 +330,11 @@ impl SmtSolver {
         let p = Lit::new(proxy_var, false);
 
         // p -> (x <= y)
-        self.sat_solver.add_clause(vec![!p, le_lit]).expect("Failed to add clause");
+        self.sat_solver.add_clause([!p, le_lit]).expect("Failed to add clause");
         // p -> (x >= y)
-        self.sat_solver.add_clause(vec![!p, ge_lit]).expect("Failed to add clause");
+        self.sat_solver.add_clause([!p, ge_lit]).expect("Failed to add clause");
         // (x <= y) ∧ (x >= y) -> p
-        self.sat_solver.add_clause(vec![!le_lit, !ge_lit, p]).expect("Failed to add clause");
+        self.sat_solver.add_clause([!le_lit, !ge_lit, p]).expect("Failed to add clause");
 
         p
     }
@@ -469,7 +469,9 @@ impl SmtSolver {
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
-        self.sat_solver.enqueue_decision(lit);
+        if !self.sat_solver.enqueue_decision(lit) {
+            return Err((self.user_scopes.len(), vec![BoolExpr::False]));
+        }
         self.propagate()
     }
 
@@ -568,13 +570,31 @@ impl SmtSolver {
     pub fn check_sat(&mut self) -> bool {
         let root_level = self.user_scopes.len();
 
-        // 1. Initial root-level propagation
-        if self.propagate().is_err() {
-            return false; // Immediate UNSAT at root level
-        }
-
         loop {
-            // 2. Find the next unassigned boolean variable
+            // 1. PROPAGATION PHASE
+            // Process the trail until exhausted. If a conflict occurs, resolve it and loop back
+            // to propagate the newly learned clause immediately.
+            if let Err((bt_level, lemma)) = self.propagate() {
+                if self.sat_solver.decision_level() <= root_level {
+                    return false;
+                }
+
+                self.cancel_until(bt_level);
+
+                let mut learned_clause = Vec::with_capacity(lemma.len());
+                for expr in lemma {
+                    learned_clause.push(self.encode_bool(&expr));
+                }
+
+                if self.sat_solver.add_clause(learned_clause).is_err() {
+                    return false;
+                }
+
+                // Crucial: loop back to propagate the learned unit clause BEFORE making any decisions
+                continue;
+            }
+
+            // 2. CHECK UNASSIGNED VARIABLES
             let mut unassigned_var = None;
             for i in 0..self.sat_solver.assigns.len() {
                 if self.sat_solver.value(i).is_none() {
@@ -583,63 +603,40 @@ impl SmtSolver {
                 }
             }
 
+            // 3. DECISION OR THEORY LATE-CHECK PHASE
             if let Some(var) = unassigned_var {
-                // 3. Guess a polarity (e.g., false)
-                let lit = Lit::new(var, false);
-
-                // 4. Decide and propagate (SAT + Theory)
-                if let Err((bt_level, lemma)) = self.decide(lit) {
-                    // We hit a conflict! If we are at the root level, the problem is UNSAT.
-                    if self.sat_solver.decision_level() <= root_level {
-                        return false;
-                    }
-
-                    self.sat_solver.cancel_until(bt_level);
-                    self.lra_theory.cancel_until(bt_level);
-                    self.enum_theory.cancel_until(bt_level);
-                    self.notified_len = self.sat_solver.trail.len();
-
-                    // 5. Learn the theory conflict as a new SAT clause
-                    let mut learned_clause = Vec::with_capacity(lemma.len());
-                    for expr in lemma {
-                        // Re-encode the AST lemma into SAT literals
-                        learned_clause.push(self.encode_bool(&expr));
-                    }
-
-                    // Add the learned clause. If adding it triggers an immediate conflict, it's UNSAT.
-                    if self.sat_solver.add_clause(learned_clause).is_err() {
-                        return false;
-                    }
+                // The trail is completely flushed, safe to guess
+                self.sat_solver.push();
+                self.lra_theory.push();
+                self.enum_theory.push();
+                if !self.sat_solver.enqueue_decision(Lit::new(var, false)) {
+                    unreachable!()
                 }
             } else {
-                // All variables are assigned and no conflicts were found.
+                // All variables assigned, evaluate late theory checks (e.g., integers)
                 if let Err((var, frac_val)) = self.lra_theory.check_ints() {
+                    // --- GOMORY CUTS ---
                     if let Some((cut_row, f0)) = self.lra_theory.generate_gomory_cut(var) {
                         let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
-
                         let bound = InfRational::new(Rational::Finite(f0), rug::Rational::from(0));
                         let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
 
-                        let learned_lemma = vec![cut_lit];
+                        self.cancel_until(root_level);
 
-                        self.sat_solver.cancel_until(root_level);
-                        self.lra_theory.cancel_until(root_level);
-                        self.enum_theory.cancel_until(root_level);
-                        self.notified_len = self.sat_solver.trail.len();
-
-                        if self.sat_solver.add_clause(learned_lemma).is_err() {
+                        if self.sat_solver.add_clause([cut_lit]).is_err() {
                             return false;
                         }
 
                         continue;
                     }
 
+                    // --- BRANCH & BOUND ---
                     let Rational::Finite(inner_frac) = frac_val else {
                         unreachable!("Fractional variable in Branch & Bound must be finite");
                     };
+
                     let mut floor_val = inner_frac.clone();
                     floor_val.floor_mut();
-
                     let mut ceil_val = inner_frac.clone();
                     ceil_val.ceil_mut();
 
@@ -649,19 +646,16 @@ impl SmtSolver {
                     let lit_ub = self.get_or_create_proxy(TheoryConstraint::LraUb(var, ub));
                     let lit_lb = self.get_or_create_proxy(TheoryConstraint::LraLb(var, lb));
 
-                    let learned_branch = vec![lit_ub, lit_lb];
+                    self.cancel_until(root_level);
 
-                    self.sat_solver.cancel_until(root_level);
-                    self.lra_theory.cancel_until(root_level);
-                    self.enum_theory.cancel_until(root_level);
-                    self.notified_len = self.sat_solver.trail.len();
-
-                    if self.sat_solver.add_clause(learned_branch).is_err() {
+                    if self.sat_solver.add_clause([lit_ub, lit_lb]).is_err() {
                         return false;
                     }
-                } else {
-                    return true;
+                    continue;
                 }
+
+                // No unassigned variables and no theory violations
+                return true;
             }
         }
     }
@@ -884,6 +878,8 @@ mod tests {
         let result = solver.assert(&expr);
         assert!(result.is_ok());
 
+        solver.propagate().expect("Initial propagation should succeed");
+
         // check_sat will guess (x < 0), the theory will reject it against (x > 5),
         // the solver will learn the lemma, backtrack, and pick (x > 10) instead.
         assert!(solver.check_sat(), "Solver must backtrack from the x < 0 branch and find the SAT path");
@@ -1045,5 +1041,44 @@ mod tests {
         solver.pop();
         assert!(solver.assert(&ge(x.clone(), cst_arith(50))).is_ok());
         assert!(solver.check_sat(), "x >= 50 is SAT after popping all scopes");
+    }
+
+    #[test]
+    fn test_gomory_cut_generation_unsat() {
+        let mut solver = SmtSolver::new();
+        let x = solver.new_int();
+        let y = solver.new_int();
+
+        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(3), y.clone()])]), cst_arith(10));
+
+        // Gomory cuts require variables to be bounded to effectively prune.
+        // Without bounds, the cut becomes a tautology, leading to stagnation.
+        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
+
+        assert!(solver.assert(&and([eq_expr, bounds])).is_ok());
+
+        assert!(!solver.check_sat(), "3x + 3y = 10 has no integer solutions, must be UNSAT");
+    }
+
+    #[test]
+    fn test_gomory_cut_generation_sat() {
+        let mut solver = SmtSolver::new();
+        let x = solver.new_int();
+        let y = solver.new_int();
+
+        // 3x + 4y = 10, with x >= 0 and y >= 0
+        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(4), y.clone()])]), cst_arith(10));
+
+        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
+
+        assert!(solver.assert(&and([eq_expr, bounds])).is_ok());
+
+        assert!(solver.check_sat(), "Il sistema ha una soluzione intera e deve essere SAT");
+
+        let val_x = solver.get_arith_val(&x).expect("x deve avere un valore");
+        let val_y = solver.get_arith_val(&y).expect("y deve avere un valore");
+
+        assert_eq!(val_x.rational_part().clone(), Rational::Finite(rug::Rational::from(2)));
+        assert_eq!(val_y.rational_part().clone(), Rational::Finite(rug::Rational::from(1)));
     }
 }

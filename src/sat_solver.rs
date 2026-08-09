@@ -32,6 +32,7 @@ impl SatSolver {
         };
         sat.true_var = sat.mk_var();
         sat.add_clause([Lit::new(sat.true_var, false)]).expect("Should be able to add true clause");
+        sat.propagate().expect("Should be able to propagate true clause");
         sat
     }
 
@@ -411,8 +412,6 @@ mod tests {
         sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]).expect("Should be able to add clause");
         sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]).expect("Should be able to add clause");
         sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]).expect("Should be able to add clause");
-
-        sat.propagate().expect("Should be able to propagate without conflicts");
 
         // Decision: ¬b7
         decide(&mut sat, Lit::new(b7, true)).expect("Should be able to decide ¬b7");
