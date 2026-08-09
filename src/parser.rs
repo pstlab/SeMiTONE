@@ -1,6 +1,7 @@
 use crate::{
     SmtSolver,
     ast::{ArithExpr, BoolExpr, Expr, add, and, eq_arith, ge, gt, le, lt, mul, or},
+    rational::Rational,
 };
 use num_traits::ToPrimitive;
 use smt2parser::{CommandStream, concrete};
@@ -106,6 +107,42 @@ impl SmtParser {
                     println!("unsat");
                 }
             }
+            concrete::Command::GetModel => {
+                if self.is_unsat {
+                    println!("(error \"get-model is only available after a successful check-sat\")");
+                    return;
+                }
+
+                println!("(");
+
+                // Print Boolean assignments
+                for (name, var) in &self.bool_vars {
+                    if let Some(val) = self.solver.get_bool_val(var) {
+                        println!("  (define-fun {} () Bool {})", name, if val { "true" } else { "false" });
+                    }
+                }
+
+                // Print Real/Integer assignments
+                for (name, var) in &self.real_vars {
+                    if let Some(val) = self.solver.get_arith_val(var) {
+                        let Rational::Finite(rat) = val.rational_part() else {
+                            println!("  (define-fun {} () Real <non-finite>)", name);
+                            continue;
+                        };
+                        let num = rat.numer();
+                        let den = rat.denom();
+
+                        // Format as decimal if the denominator is 1, otherwise as an SMT-LIB division
+                        if den == &rug::Integer::from(1) {
+                            println!("  (define-fun {} () Real {}.0)", name, num);
+                        } else {
+                            println!("  (define-fun {} () Real (/ {} {}))", name, num, den);
+                        }
+                    }
+                }
+
+                println!(")");
+            }
             concrete::Command::Push { level } => {
                 let n = level.to_usize().unwrap_or_else(|| panic!("push level too large for usize: {}", level));
                 for _ in 0..n {
@@ -141,7 +178,7 @@ impl SmtParser {
     fn translate_bool_term(&self, term: &concrete::Term) -> BoolExpr {
         match term {
             concrete::Term::QualIdentifier(id) => {
-                let name = Self::symbol_of_qual_identifier(&id);
+                let name = Self::symbol_of_qual_identifier(id);
                 if name == "true" {
                     return BoolExpr::True;
                 }
@@ -151,7 +188,7 @@ impl SmtParser {
                 self.bool_vars.get(name).cloned().unwrap_or_else(|| panic!("Undeclared boolean variable: {}", name))
             }
             concrete::Term::Application { qual_identifier, arguments } => {
-                let op = Self::symbol_of_qual_identifier(&qual_identifier);
+                let op = Self::symbol_of_qual_identifier(qual_identifier);
                 match op {
                     "and" => and(arguments.iter().map(|a| self.translate_bool_term(a))),
                     "or" => or(arguments.iter().map(|a| self.translate_bool_term(a))),
@@ -206,11 +243,11 @@ impl SmtParser {
                 _ => panic!("Unsupported constant type"),
             },
             concrete::Term::QualIdentifier(id) => {
-                let name = Self::symbol_of_qual_identifier(&id);
+                let name = Self::symbol_of_qual_identifier(id);
                 self.real_vars.get(name).cloned().unwrap_or_else(|| panic!("Undeclared arithmetic variable: {}", name))
             }
             concrete::Term::Application { qual_identifier, arguments } => {
-                let op = Self::symbol_of_qual_identifier(&qual_identifier);
+                let op = Self::symbol_of_qual_identifier(qual_identifier);
                 let args: Vec<_> = arguments.iter().map(|a| self.translate_arith_term(a)).collect();
 
                 match op {
@@ -248,11 +285,11 @@ impl SmtParser {
     fn is_bool_term(&self, term: &concrete::Term) -> bool {
         match term {
             concrete::Term::QualIdentifier(id) => {
-                let name = Self::symbol_of_qual_identifier(&id);
+                let name = Self::symbol_of_qual_identifier(id);
                 name == "true" || name == "false" || self.bool_vars.contains_key(name)
             }
             concrete::Term::Application { qual_identifier, .. } => {
-                let op = Self::symbol_of_qual_identifier(&qual_identifier);
+                let op = Self::symbol_of_qual_identifier(qual_identifier);
                 matches!(op, "and" | "or" | "not" | "=>" | "<=" | ">=" | "<" | ">" | "=")
             }
             _ => false,
