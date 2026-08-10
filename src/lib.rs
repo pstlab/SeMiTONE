@@ -173,7 +173,13 @@ impl SmtSolver {
             BoolExpr::True => self.sat_solver.true_lit(),
             BoolExpr::False => !self.sat_solver.true_lit(),
             BoolExpr::Var(v) => Lit::new(*v, false),
-            BoolExpr::Not(inner) => !self.encode_bool(inner),
+            BoolExpr::Not(inner) => match inner.as_ref() {
+                BoolExpr::Lt(a1, a2) => self.mk_ge(a1, a2, false),
+                BoolExpr::Le(a1, a2) => self.mk_ge(a1, a2, true),
+                BoolExpr::Ge(a1, a2) => self.mk_le(a1, a2, true),
+                BoolExpr::Gt(a1, a2) => self.mk_le(a1, a2, false),
+                _ => !self.encode_bool(inner),
+            },
             BoolExpr::And(terms) => {
                 let mut lits = Vec::with_capacity(terms.len());
                 for term in terms {
