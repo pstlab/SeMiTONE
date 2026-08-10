@@ -18,7 +18,7 @@ name = "semitone"
 required-features = ["parser"]
 
 [features]
-default = ["parser"]
+default = []
 parser = ["dep:smt2parser", "dep:num-traits"]
 
 [dependencies]
