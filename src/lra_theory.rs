@@ -2,22 +2,21 @@ use crate::{
     rational::{InfRational, Rational},
     sat_solver::Lit,
 };
-use rug::Rational as RugRational;
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    mem,
-};
+use rug::{Assign, Rational as RugRational};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::{collections::BTreeMap, mem};
 
 pub(super) struct LraTheory {
-    ints: Vec<bool>,                                    // true = integer variable, false = real variable
-    reals: Vec<InfRational>,                            // Current assignments
-    pub(super) lbs: Vec<(Option<Lit>, InfRational)>,    // Current lower bounds
-    pub(super) ubs: Vec<(Option<Lit>, InfRational)>,    // Current upper bounds
-    pub(super) lin_to_slack: HashMap<SparseRow, usize>, // Mapping from linear constraints to their slack variable
-    pub(super) tableau: BTreeMap<usize, SparseRow>,     // Tableau: basic variable -> linear expression over non-basic variables
-    pub(super) t_watches: Vec<HashSet<usize>>,          // For each variable, the set of tableau rows containing it
-    bound_trail: Vec<BoundUpdate>,                      // Trail of bound updates for backtracking
-    trail_lim: Vec<usize>,                              // Trail limits
+    ints: Vec<bool>,                                      // true = integer variable, false = real variable
+    reals: Vec<InfRational>,                              // Current assignments
+    pub(super) lbs: Vec<(Option<Lit>, InfRational)>,      // Current lower bounds
+    pub(super) ubs: Vec<(Option<Lit>, InfRational)>,      // Current upper bounds
+    pub(super) lin_to_slack: FxHashMap<SparseRow, usize>, // Mapping from linear constraints to their slack variable
+    pub(super) tableau: BTreeMap<usize, SparseRow>,       // Tableau: basic variable -> linear expression over non-basic variables
+    pub(super) t_watches: Vec<FxHashSet<usize>>,          // For each variable, the set of tableau rows containing it
+    bound_trail: Vec<BoundUpdate>,                        // Trail of bound updates for backtracking
+    trail_lim: Vec<usize>,                                // Trail limits
+    rational_pool: Vec<RugRational>,                      // Pool of rational numbers for reuse
 }
 
 impl LraTheory {
@@ -27,11 +26,12 @@ impl LraTheory {
             reals: Vec::new(),
             lbs: Vec::new(),
             ubs: Vec::new(),
-            lin_to_slack: HashMap::new(),
+            lin_to_slack: FxHashMap::default(),
             tableau: BTreeMap::new(),
             t_watches: Vec::new(),
             bound_trail: Vec::new(),
             trail_lim: Vec::new(),
+            rational_pool: Vec::new(),
         }
     }
 
@@ -50,7 +50,7 @@ impl LraTheory {
         self.reals.push(Self::zero());
         self.lbs.push((None, Self::negative_inf()));
         self.ubs.push((None, Self::positive_inf()));
-        self.t_watches.push(HashSet::new());
+        self.t_watches.push(FxHashSet::default());
 
         var
     }
@@ -281,10 +281,9 @@ impl LraTheory {
         let pivot_coeff = new_row.remove(&entering).expect("entering variable must occur in leaving row");
         assert!(!pivot_coeff.is_zero(), "pivot coefficient must be non-zero");
 
-        let minus_pivot = -pivot_coeff.clone();
-
+        let inv_pivot = (-pivot_coeff.clone()).recip();
         for coeff in new_row.values_mut() {
-            *coeff /= &minus_pivot;
+            *coeff *= &inv_pivot;
         }
 
         new_row.insert(leaving, pivot_coeff.recip());
@@ -303,7 +302,7 @@ impl LraTheory {
                 continue;
             };
 
-            row.add_scaled(&new_row, &coeff_entering, &mut self.t_watches, row_var);
+            row.add_scaled(&new_row, &coeff_entering, &mut self.t_watches, row_var, &mut self.rational_pool);
         }
 
         for v in new_row.keys().copied() {
@@ -493,52 +492,59 @@ impl SparseRow {
         }
     }
 
-    pub fn add_scaled(&mut self, other: &SparseRow, scale: &RugRational, watches: &mut [HashSet<usize>], target_row_var: usize) {
-        let mut new_terms = Vec::with_capacity(self.terms.len() + other.terms.len());
-        let mut i = 0;
-        let mut j = 0;
+    pub fn add_scaled(&mut self, other: &SparseRow, scale: &RugRational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<RugRational>) {
+        let old_terms = std::mem::take(&mut self.terms);
+        let mut new_terms = Vec::with_capacity(old_terms.len());
 
-        while i < self.terms.len() && j < other.terms.len() {
-            let (v1, c1) = &self.terms[i];
-            let (v2, c2) = &other.terms[j];
+        let mut old_iter = old_terms.into_iter().peekable();
+        let mut other_iter = other.terms.iter().peekable();
 
-            if v1 < v2 {
-                new_terms.push((*v1, c1.clone()));
-                i += 1;
-            } else if v1 > v2 {
-                let delta = c2.clone() * scale;
+        while let (Some(&(v1, _)), Some(&(v2, _))) = (old_iter.peek(), other_iter.peek()) {
+            if v1 < *v2 {
+                new_terms.push(old_iter.next().unwrap());
+            } else if v1 > *v2 {
+                let (v2, c2) = other_iter.next().unwrap();
+
+                let mut delta = pool.pop().unwrap_or_else(|| rug::Rational::from(0));
+                delta.assign(c2 * scale);
+
                 if !delta.is_zero() {
                     watches[*v2].insert(target_row_var);
                     new_terms.push((*v2, delta));
-                }
-                j += 1;
-            } else {
-                let delta = c2.clone() * scale;
-                let new_c = c1.clone() + delta;
-
-                if new_c.is_zero() {
-                    watches[*v1].remove(&target_row_var);
                 } else {
-                    new_terms.push((*v1, new_c));
+                    pool.push(delta);
                 }
-                i += 1;
-                j += 1;
+            } else {
+                let (v1, mut c1) = old_iter.next().unwrap();
+                let (_, c2) = other_iter.next().unwrap();
+
+                let mut tmp_delta = pool.pop().unwrap_or_else(|| rug::Rational::from(0));
+                tmp_delta.assign(c2 * scale);
+
+                c1 += &tmp_delta;
+                pool.push(tmp_delta);
+
+                if c1.is_zero() {
+                    watches[v1].remove(&target_row_var);
+                    pool.push(c1);
+                } else {
+                    new_terms.push((v1, c1));
+                }
             }
         }
 
-        while i < self.terms.len() {
-            new_terms.push(self.terms[i].clone());
-            i += 1;
-        }
+        new_terms.extend(old_iter);
 
-        while j < other.terms.len() {
-            let (v2, c2) = &other.terms[j];
-            let delta = c2.clone() * scale;
+        for (v2, c2) in other_iter {
+            let mut delta = pool.pop().unwrap_or_else(|| rug::Rational::from(0));
+            delta.assign(c2 * scale);
+
             if !delta.is_zero() {
                 watches[*v2].insert(target_row_var);
                 new_terms.push((*v2, delta));
+            } else {
+                pool.push(delta);
             }
-            j += 1;
         }
 
         self.terms = new_terms;
@@ -697,12 +703,13 @@ mod tests {
 
     #[test]
     fn test_sparse_row_add_scaled_cancellation() {
+        let rational_pool = &mut Vec::new();
         // row1 = 2*v0 + 3*v1 - 1*v3
         let mut row1 = build_row(&[(0, 2), (1, 3), (3, -1)]);
         // row2 = 1*v1 + 4*v2 + 2*v3
         let row2 = build_row(&[(1, 1), (2, 4), (3, 2)]);
 
-        let mut watches = vec![HashSet::new(); 4];
+        let mut watches = vec![FxHashSet::default(); 4];
         let target_row = 10;
 
         watches[0].insert(target_row);
@@ -710,7 +717,7 @@ mod tests {
         watches[3].insert(target_row);
 
         let scale = RugRational::from(-3);
-        row1.add_scaled(&row2, &scale, &mut watches, target_row);
+        row1.add_scaled(&row2, &scale, &mut watches, target_row, rational_pool);
 
         assert_eq!(row1.len(), 3, "The row should have exactly 3 active terms");
         assert_eq!(row1.get(&0), Some(&RugRational::from(2)));

@@ -1,14 +1,14 @@
 use crate::sat_solver::Lit;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(super) struct EnumTheory {
-    pub(super) initial_domains: Vec<HashSet<i32>>,
-    pub(super) active_domains: Vec<HashSet<i32>>,
+    pub(super) initial_domains: Vec<FxHashSet<i32>>,
+    pub(super) active_domains: Vec<FxHashSet<i32>>,
 
     trail: Vec<(usize, i32)>,
     trail_lim: Vec<usize>,
 
-    removal_reasons: HashMap<(usize, i32), Lit>,
+    removal_reasons: FxHashMap<(usize, i32), Lit>,
 }
 
 impl EnumTheory {
@@ -18,11 +18,11 @@ impl EnumTheory {
             active_domains: Vec::new(),
             trail: Vec::new(),
             trail_lim: Vec::new(),
-            removal_reasons: HashMap::new(),
+            removal_reasons: FxHashMap::default(),
         }
     }
 
-    pub(super) fn mk_var(&mut self, domain: HashSet<i32>) -> usize {
+    pub(super) fn mk_var(&mut self, domain: FxHashSet<i32>) -> usize {
         let id = self.initial_domains.len();
         self.initial_domains.push(domain.clone());
         self.active_domains.push(domain);
@@ -112,7 +112,7 @@ mod tests {
 
     fn setup_enum() -> (EnumTheory, usize) {
         let mut theory = EnumTheory::new();
-        let domain: HashSet<i32> = vec![1, 2, 3].into_iter().collect();
+        let domain: FxHashSet<i32> = vec![1, 2, 3].into_iter().collect();
         let var = theory.mk_var(domain);
         (theory, var)
     }
