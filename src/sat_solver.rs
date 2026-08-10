@@ -80,7 +80,7 @@ impl SatSolver {
 
                 // Check if clause is already satisfied
                 if self.lit_value(&self.clauses[clause_idx].lits[0]) == Some(true) {
-                    self.watches[lit.index()].push(clause_idx);
+                    self.watches[falsified_index].push(clause_idx);
                     continue;
                 }
 

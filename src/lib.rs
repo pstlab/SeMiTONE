@@ -583,11 +583,7 @@ impl SmtSolver {
             // Process the trail until exhausted. If a conflict occurs, resolve it and loop back
             // to propagate the newly learned clause immediately.
             if let Err((bt_level, lemma)) = self.propagate() {
-                if self.sat_solver.decision_level() <= root_level {
-                    return false;
-                }
-
-                self.cancel_until(bt_level);
+                self.cancel_until(bt_level.max(root_level));
 
                 let mut learned_clause = Vec::with_capacity(lemma.len());
                 for expr in lemma {
