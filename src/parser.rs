@@ -234,11 +234,13 @@ impl<'a> SmtParser<'a> {
                     ArithExpr::Const(rat)
                 }
                 concrete::Constant::Decimal(dec) => {
-                    // smt2parser handles decimals as rational representations if needed,
-                    // but usually parsing the float string into rug::Rational works beautifully.
-                    // E.g., "10.5" -> 21/2
-                    let rat = rug::Rational::from_f64(dec.to_string().parse::<f64>().unwrap()).unwrap();
-                    ArithExpr::Const(rat)
+                    let num_str = dec.numer().to_string();
+                    let den_str = dec.denom().to_string();
+
+                    let num = rug::Integer::from_str_radix(&num_str, 10).unwrap();
+                    let den = rug::Integer::from_str_radix(&den_str, 10).unwrap();
+
+                    ArithExpr::Const(rug::Rational::from((num, den)))
                 }
                 _ => panic!("Unsupported constant type"),
             },
