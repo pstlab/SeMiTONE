@@ -526,6 +526,35 @@ impl SmtSolver {
             BoolExpr::True => Some(true),
             BoolExpr::False => Some(false),
             BoolExpr::Var(v) => *self.sat_solver.value(*v),
+            BoolExpr::Not(inner) => self.get_bool_val(inner).map(|val| !val),
+            BoolExpr::And(args) => {
+                let mut result = Some(true);
+                for arg in args {
+                    match self.get_bool_val(arg) {
+                        Some(val) => {
+                            if !val {
+                                return Some(false);
+                            }
+                        }
+                        None => result = None,
+                    }
+                }
+                result
+            }
+            BoolExpr::Or(args) => {
+                let mut result = Some(false);
+                for arg in args {
+                    match self.get_bool_val(arg) {
+                        Some(val) => {
+                            if val {
+                                return Some(true);
+                            }
+                        }
+                        None => result = None,
+                    }
+                }
+                result
+            }
             _ => None,
         }
     }
@@ -534,6 +563,18 @@ impl SmtSolver {
         match expr {
             ArithExpr::Const(c) => Some(InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0))),
             ArithExpr::RealVar(v) | ArithExpr::IntVar(v) => Some(self.lra_theory.value(*v).clone()),
+            ArithExpr::Add(terms) => {
+                let mut sum = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
+                for term in terms {
+                    if let Some(val) = self.get_arith_val(term) {
+                        sum += val;
+                    } else {
+                        return None;
+                    }
+                }
+                Some(sum)
+            }
+            ArithExpr::Neg(term) => self.get_arith_val(term).map(|val| -val),
             _ => None,
         }
     }
