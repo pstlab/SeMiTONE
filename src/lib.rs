@@ -566,10 +566,8 @@ impl SmtSolver {
             ArithExpr::Add(terms) => {
                 let mut sum = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 for term in terms {
-                    if let Some(val) = self.get_arith_val(term) {
-                        sum += val;
-                    } else {
-                        return None;
+                    {
+                        sum += self.get_arith_val(term)?;
                     }
                 }
                 Some(sum)
