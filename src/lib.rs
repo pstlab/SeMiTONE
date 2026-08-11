@@ -4,7 +4,7 @@ mod lra_theory;
 #[cfg(feature = "parser")]
 pub mod parser;
 mod proxy;
-mod rational;
+pub mod rational;
 mod sat_solver;
 
 use crate::{
