@@ -483,6 +483,18 @@ impl SmtSolver {
         self.propagate()
     }
 
+    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> Result<(), (usize, Vec<BoolExpr>)> {
+        let eq_expr = TheoryConstraint::EnumEq(
+            match expr {
+                EnumExpr::Var(v) => *v,
+                EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
+            },
+            value,
+        );
+        let lit = self.get_or_create_proxy(eq_expr);
+        self.decide(lit)
+    }
+
     pub fn cancel_until(&mut self, level: usize) {
         self.sat_solver.cancel_until(level);
         self.lra_theory.cancel_until(level);
