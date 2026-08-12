@@ -528,6 +528,16 @@ impl SmtSolver {
         self.sat_solver.trail.len()
     }
 
+    /// Returns the size of the solver trail at a specific decision level.
+    pub fn get_trail_len_at_level(&self, level: usize) -> usize {
+        if level < self.sat_solver.trail_lim.len() { self.sat_solver.trail_lim[level] } else { self.sat_solver.trail.len() }
+    }
+
+    /// Returns a slice of the solver trail between two indices.
+    pub fn get_trail_slice(&self, start: usize, end: usize) -> &[Lit] {
+        &self.sat_solver.trail[start..end]
+    }
+
     fn propagate(&mut self) -> Result<(), (usize, Vec<BoolExpr>)> {
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
             return Err((bt_level, Self::build_conflict(conflict)));

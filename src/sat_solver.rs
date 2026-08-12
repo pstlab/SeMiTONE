@@ -10,7 +10,7 @@ pub(super) struct SatSolver {
     analyze_toclear: Vec<usize>,           // Temporary storage for conflict analysis
     prop_q: VecDeque<Lit>,                 // Queue of literals to propagate
     pub(super) trail: Vec<Lit>,            // Trail of assigned literals for backtracking
-    trail_lim: Vec<usize>,                 // Indices in the trail where decisions were made
+    pub(super) trail_lim: Vec<usize>,      // Indices in the trail where decisions were made
     level: Vec<Option<usize>>,             // Decision level for each variable
     true_var: usize,                       // Index of the variable representing the constant true (used for unit propagation)
 }
