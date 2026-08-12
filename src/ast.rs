@@ -248,52 +248,85 @@ fn distribute(expr: &BoolExpr) -> BoolExpr {
     }
 }
 
+/// Converts a boolean formula to conjunctive normal form.
+///
+/// This rewrites the expression by pushing negations downward and distributing
+/// logical operators until the result is represented as a CNF formula.
 pub fn to_cnf(expr: &BoolExpr) -> BoolExpr {
     distribute(&push_negations(expr))
 }
 
+/// Builds an integer arithmetic constant.
 pub fn cst_arith(val: i32) -> ArithExpr {
     ArithExpr::Const(rug::Rational::from(val))
 }
+
+/// Builds a rational arithmetic constant from a numerator and denominator.
 pub fn cst_frac(num: i32, denom: i32) -> ArithExpr {
     ArithExpr::Const(rug::Rational::from((num, denom)))
 }
+
+/// Builds an enum constant value.
 pub fn cst_enum(val: i32) -> EnumExpr {
     EnumExpr::Const(val)
 }
+
+/// Creates a conjunction of boolean expressions.
 pub fn and(es: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
     BoolExpr::And(es.into_iter().collect())
 }
+
+/// Creates a disjunction of boolean expressions.
 pub fn or(es: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
     BoolExpr::Or(es.into_iter().collect())
 }
+
+/// Creates a sum of arithmetic expressions.
 pub fn add(es: impl IntoIterator<Item = ArithExpr>) -> ArithExpr {
     ArithExpr::Add(es.into_iter().collect())
 }
+
+/// Creates a product of arithmetic expressions.
 pub fn mul(es: impl IntoIterator<Item = ArithExpr>) -> ArithExpr {
     ArithExpr::Mul(es.into_iter().collect())
 }
+
+/// Builds the atom `e1 < e2`.
 pub fn lt(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
     BoolExpr::Lt(e1, e2)
 }
+
+/// Builds the atom `e1 <= e2`.
 pub fn le(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
     BoolExpr::Le(e1, e2)
 }
+
+/// Builds a generic equality between two expressions.
 pub fn eq(e1: Expr, e2: Expr) -> BoolExpr {
     BoolExpr::Eq(Box::new(e1), Box::new(e2))
 }
+
+/// Builds an arithmetic equality `e1 = e2`.
 pub fn eq_arith(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
     BoolExpr::Eq(Box::new(Expr::Arith(e1)), Box::new(Expr::Arith(e2)))
 }
+
+/// Builds an enum equality `e1 = e2`.
 pub fn eq_enum(e1: EnumExpr, e2: EnumExpr) -> BoolExpr {
     BoolExpr::Eq(Box::new(Expr::Enum(e1)), Box::new(Expr::Enum(e2)))
 }
+
+/// Builds the atom `e1 >= e2`.
 pub fn ge(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
     BoolExpr::Ge(e1, e2)
 }
+
+/// Builds the atom `e1 > e2`.
 pub fn gt(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
     BoolExpr::Gt(e1, e2)
 }
+
+/// Constrains `z` to be the minimum of a non-empty set of arithmetic values.
 pub fn min(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr {
     let args = args.into_iter().collect::<Vec<_>>();
     if args.is_empty() {
@@ -314,6 +347,8 @@ pub fn min(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr 
 
     BoolExpr::And(and_terms)
 }
+
+/// Constrains `z` to be the maximum of a non-empty set of arithmetic values.
 pub fn max(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr {
     let args = args.into_iter().collect::<Vec<_>>();
     if args.is_empty() {

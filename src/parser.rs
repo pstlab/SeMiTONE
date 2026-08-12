@@ -11,6 +11,10 @@ use std::{
     io::{BufReader, Write},
 };
 
+/// SMT-LIB parser built on top of the solver.
+///
+/// It reads commands from a string or file and writes SAT/UNSAT responses to the
+/// configured output sink.
 pub struct SmtParser<'a> {
     pub solver: SmtSolver,
     bool_vars: HashMap<String, BoolExpr>,
@@ -20,6 +24,7 @@ pub struct SmtParser<'a> {
 }
 
 impl<'a> SmtParser<'a> {
+    /// Creates a parser that writes the SMT response stream to the given writer.
     pub fn new(writer: &'a mut dyn Write) -> Self {
         Self {
             solver: SmtSolver::new(),
@@ -30,6 +35,7 @@ impl<'a> SmtParser<'a> {
         }
     }
 
+    /// Parses and executes a full SMT-LIB script from an in-memory string.
     pub fn run_str(&mut self, script: &str) {
         use std::io::Cursor;
 
@@ -45,6 +51,7 @@ impl<'a> SmtParser<'a> {
         }
     }
 
+    /// Parses and executes an SMT-LIB file from disk.
     pub fn run_file(&mut self, path: &str) {
         let file = File::open(path).expect("Failed to open SMT-LIB file");
         let reader = BufReader::new(file);

@@ -17,6 +17,10 @@ use crate::{
 };
 use rug::Assign;
 
+/// Main solver entry point for propositional, linear arithmetic, and enum constraints.
+///
+/// The solver combines a SAT core with theory propagation for linear rational
+/// arithmetic and finite-domain enum reasoning.
 pub struct SmtSolver {
     registry: ProxyRegistry,
     sat_solver: SatSolver,
@@ -33,6 +37,7 @@ impl Default for SmtSolver {
 }
 
 impl SmtSolver {
+    /// Creates a new empty solver instance.
     pub fn new() -> Self {
         Self {
             registry: ProxyRegistry::new(),
@@ -44,22 +49,30 @@ impl SmtSolver {
         }
     }
 
+    /// Allocates a new Boolean variable.
     pub fn new_bool(&mut self) -> BoolExpr {
         BoolExpr::Var(self.sat_solver.mk_var())
     }
 
+    /// Allocates a new integer variable.
     pub fn new_int(&mut self) -> ArithExpr {
         ArithExpr::IntVar(self.lra_theory.mk_int())
     }
 
+    /// Allocates a new real variable.
     pub fn new_real(&mut self) -> ArithExpr {
         ArithExpr::RealVar(self.lra_theory.mk_real())
     }
 
+    /// Allocates a new enum variable with the given finite domain.
     pub fn new_enum(&mut self, domain: impl IntoIterator<Item = i32>) -> EnumExpr {
         EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
     }
 
+    /// Adds a Boolean constraint to the current solver context.
+    ///
+    /// Returns `Ok(())` when the formula is consistent with the current theory
+    /// state, or an error containing the backtracking scope and a conflict witness.
     pub fn assert(&mut self, expr: &BoolExpr) -> Result<(), (usize, Vec<BoolExpr>)> {
         if !self.assert_internal(expr, true) {
             return Err((self.user_scopes.len(), vec![BoolExpr::False]));
@@ -473,6 +486,7 @@ impl SmtSolver {
             .collect()
     }
 
+    /// Adds a decision literal to the current search branch.
     pub fn decide(&mut self, lit: Lit) -> Result<(), (usize, Vec<BoolExpr>)> {
         self.sat_solver.push();
         self.lra_theory.push();
@@ -483,6 +497,7 @@ impl SmtSolver {
         self.propagate()
     }
 
+    /// Decides that an enum variable takes a specific value in the current branch.
     pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> Result<(), (usize, Vec<BoolExpr>)> {
         let eq_expr = TheoryConstraint::EnumEq(
             match expr {
@@ -495,11 +510,22 @@ impl SmtSolver {
         self.decide(lit)
     }
 
+    /// Cancels all decisions and theory updates at levels deeper than `level`.
     pub fn cancel_until(&mut self, level: usize) {
         self.sat_solver.cancel_until(level);
         self.lra_theory.cancel_until(level);
         self.enum_theory.cancel_until(level);
         self.notified_len = self.sat_solver.trail.len();
+    }
+
+    /// Returns the trail suffix starting at `from_index`.
+    pub fn get_trail_delta(&self, from_index: usize) -> &[Lit] {
+        &self.sat_solver.trail[from_index..]
+    }
+
+    /// Returns the current size of the solver trail.
+    pub fn current_trail_len(&self) -> usize {
+        self.sat_solver.trail.len()
     }
 
     fn propagate(&mut self) -> Result<(), (usize, Vec<BoolExpr>)> {
@@ -533,6 +559,7 @@ impl SmtSolver {
         Ok(())
     }
 
+    /// Returns the assigned value of a Boolean expression when it is fully determined.
     pub fn get_bool_val(&self, expr: &BoolExpr) -> Option<bool> {
         match expr {
             BoolExpr::True => Some(true),
@@ -571,6 +598,7 @@ impl SmtSolver {
         }
     }
 
+    /// Returns the current value of an arithmetic expression when it is fixed by the model.
     pub fn get_arith_val(&self, expr: &ArithExpr) -> Option<InfRational> {
         match expr {
             ArithExpr::Const(c) => Some(InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0))),
@@ -589,6 +617,7 @@ impl SmtSolver {
         }
     }
 
+    /// Returns the concrete value of an enum variable if it has been fully assigned.
     pub fn get_enum_val(&self, expr: &EnumExpr) -> Option<i32> {
         match expr {
             EnumExpr::Const(c) => Some(*c),
@@ -599,6 +628,7 @@ impl SmtSolver {
         }
     }
 
+    /// Opens a new incremental scope for assertions and decisions.
     pub fn push(&mut self) {
         let clauses_len = self.sat_solver.clauses.len();
 
@@ -610,6 +640,7 @@ impl SmtSolver {
         self.user_scopes.push((current_level, clauses_len));
     }
 
+    /// Restores the previous solver scope and discards all assertions added since it was opened.
     pub fn pop(&mut self) {
         if let Some((saved_level, saved_clauses_len)) = self.user_scopes.pop() {
             let target_level = saved_level - 1;
@@ -625,7 +656,7 @@ impl SmtSolver {
         }
     }
 
-    /// Explores the search space to find a valid model or prove UNSAT.
+    /// Explores the search space to find a valid model or prove the formula is UNSAT.
     pub fn check_sat(&mut self) -> bool {
         let root_level = self.user_scopes.len();
 

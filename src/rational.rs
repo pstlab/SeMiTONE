@@ -9,26 +9,32 @@ pub enum Rational {
 }
 
 impl Rational {
+    /// Creates the zero rational value.
     pub fn zero() -> Self {
         Self::Finite(rug::Rational::from(0))
     }
 
+    /// Returns `true` when the value is finite.
     pub fn is_finite(&self) -> bool {
         matches!(self, Self::Finite(_))
     }
 
+    /// Returns `true` when the value is strictly positive.
     pub fn is_positive(&self) -> bool {
         matches!(self, Self::Finite(r) if r.is_positive()) || matches!(self, Self::PositiveInf)
     }
 
+    /// Returns `true` when the value is strictly negative.
     pub fn is_negative(&self) -> bool {
         matches!(self, Self::Finite(r) if r.is_negative()) || matches!(self, Self::NegativeInf)
     }
 
+    /// Returns `true` when the value is an integer.
     pub fn is_integer(&self) -> bool {
         matches!(self, Self::Finite(r) if r.is_integer())
     }
 
+    /// Returns `true` when the value is equal to zero.
     pub fn is_zero(&self) -> bool {
         matches!(self, Self::Finite(r) if r.is_zero())
     }
@@ -343,20 +349,24 @@ pub struct InfRational {
 }
 
 impl InfRational {
+    /// Creates a rational value with a finite part and an infinitesimal offset.
     pub fn new(rat: Rational, inf: rug::Rational) -> Self {
         let inf = if rat.is_finite() { inf } else { rug::Rational::from(0) };
 
         Self { rat, inf }
     }
 
+    /// Returns the finite/infinite rational component.
     pub fn rational_part(&self) -> &Rational {
         &self.rat
     }
 
+    /// Returns the infinitesimal component associated with the value.
     pub fn infinitesimal_part(&self) -> &rug::Rational {
         &self.inf
     }
 
+    /// Consumes the value and returns its two components.
     pub fn into_parts(self) -> (Rational, rug::Rational) {
         (self.rat, self.inf)
     }
