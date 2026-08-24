@@ -1,3 +1,4 @@
+use semitone::parser::SmtParser;
 use std::env;
 use std::io::{self, Read};
 
@@ -11,7 +12,7 @@ fn main() {
 
     let file_path = &args[1];
     let mut stdout = std::io::stdout();
-    let mut runner = semitone::parser::SmtParser::new(&mut stdout);
+    let mut runner = SmtParser::new(&mut stdout);
 
     if file_path == "-" {
         let mut buffer = String::new();

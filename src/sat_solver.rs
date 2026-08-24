@@ -55,6 +55,10 @@ impl SatSolver {
         idx
     }
 
+    pub(super) fn num_vars(&self) -> usize {
+        self.assigns.len()
+    }
+
     pub(super) fn push(&mut self) {
         assert!(self.prop_q.is_empty(), "Cannot push decision level while propagation queue is not empty");
         self.trail_lim.push(self.trail.len());

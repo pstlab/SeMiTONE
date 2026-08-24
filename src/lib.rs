@@ -6,6 +6,8 @@ pub mod parser;
 mod proxy;
 pub mod rational;
 mod sat_solver;
+#[cfg(feature = "parser")]
+pub mod solver;
 
 use crate::{
     ast::{ArithExpr, BoolExpr, EnumExpr, Expr},
@@ -538,6 +540,11 @@ impl SmtSolver {
         &self.sat_solver.trail[start..end]
     }
 
+    /// Returns the number of user-defined scopes currently active in the solver.
+    pub fn user_scopes_len(&self) -> usize {
+        self.user_scopes.len()
+    }
+
     fn propagate(&mut self) -> Result<(), (usize, Vec<BoolExpr>)> {
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
             return Err((bt_level, Self::build_conflict(conflict)));
@@ -666,21 +673,49 @@ impl SmtSolver {
         }
     }
 
+    fn compute_backtrack_level(&self, lemma: &[Lit], root_level: usize) -> usize {
+        if lemma.len() <= 1 {
+            return root_level;
+        }
+
+        let mut levels: Vec<usize> = lemma.iter().map(|lit| self.sat_solver.level(lit.var()).expect("literal should have a decision level")).collect();
+
+        levels.sort_unstable_by(|a, b| b.cmp(a));
+
+        let max_level = levels[0];
+
+        if max_level <= root_level {
+            return root_level;
+        }
+
+        if levels.iter().filter(|&&l| l == max_level).count() == 1 { levels[1].max(root_level) } else { (max_level - 1).max(root_level) }
+    }
+
     /// Explores the search space to find a valid model or prove the formula is UNSAT.
     pub fn check_sat(&mut self) -> bool {
         let root_level = self.user_scopes.len();
+        let mut heuristic = BranchingHeuristics::new(self.sat_solver.num_vars(), 0.95, true);
 
         loop {
             // 1. PROPAGATION PHASE
             // Process the trail until exhausted. If a conflict occurs, resolve it and loop back
             // to propagate the newly learned clause immediately.
             if let Err((bt_level, lemma)) = self.propagate() {
-                self.cancel_until(bt_level.max(root_level));
+                let bt_level = bt_level.max(root_level);
+                for lit in self.get_trail_delta(self.get_trail_len_at_level(bt_level)) {
+                    heuristic.save_phase(lit.var(), lit.sign());
+                    heuristic.insert_unassigned(lit.var());
+                }
+                self.cancel_until(bt_level);
 
                 let mut learned_clause = Vec::with_capacity(lemma.len());
                 for expr in lemma {
-                    learned_clause.push(self.encode_bool(&expr));
+                    let lit = self.encode_bool(&expr);
+                    learned_clause.push(lit);
+                    heuristic.bump_activity(lit.var());
                 }
+
+                heuristic.decay_activities();
 
                 if self.sat_solver.add_clause(learned_clause).is_err() {
                     return false;
@@ -691,21 +726,16 @@ impl SmtSolver {
             }
 
             // 2. CHECK UNASSIGNED VARIABLES
-            let mut unassigned_var = None;
-            for i in 0..self.sat_solver.assigns.len() {
-                if self.sat_solver.value(i).is_none() {
-                    unassigned_var = Some(i);
-                    break;
-                }
-            }
+            heuristic.sync_with_solver(self.sat_solver.num_vars());
+            let next_decision = heuristic.pick_branching_literal(|var| self.sat_solver.value(var).is_none());
 
             // 3. DECISION OR THEORY LATE-CHECK PHASE
-            if let Some(var) = unassigned_var {
+            if let Some((var, polarity)) = next_decision {
                 // The trail is completely flushed, safe to guess
                 self.sat_solver.push();
                 self.lra_theory.push();
                 self.enum_theory.push();
-                if !self.sat_solver.enqueue_decision(Lit::new(var, false)) {
+                if !self.sat_solver.enqueue_decision(Lit::new(var, polarity)) {
                     unreachable!()
                 }
             } else {
@@ -717,6 +747,10 @@ impl SmtSolver {
                         let bound = InfRational::new(Rational::Finite(f0), rug::Rational::from(0));
                         let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
 
+                        for lit in self.get_trail_delta(self.get_trail_len_at_level(root_level)) {
+                            heuristic.save_phase(lit.var(), lit.sign());
+                            heuristic.insert_unassigned(lit.var());
+                        }
                         self.cancel_until(root_level);
 
                         if self.sat_solver.add_clause([cut_lit]).is_err() {
@@ -742,6 +776,10 @@ impl SmtSolver {
                     let lit_ub = self.get_or_create_proxy(TheoryConstraint::LraUb(var, ub));
                     let lit_lb = self.get_or_create_proxy(TheoryConstraint::LraLb(var, lb));
 
+                    for lit in self.get_trail_delta(self.get_trail_len_at_level(root_level)) {
+                        heuristic.save_phase(lit.var(), lit.sign());
+                        heuristic.insert_unassigned(lit.var());
+                    }
                     self.cancel_until(root_level);
 
                     if self.sat_solver.add_clause([lit_ub, lit_lb]).is_err() {
@@ -755,23 +793,170 @@ impl SmtSolver {
             }
         }
     }
+}
 
-    fn compute_backtrack_level(&self, lemma: &[Lit], root_level: usize) -> usize {
-        if lemma.len() <= 1 {
-            return root_level;
+struct BranchingHeuristics {
+    activities: Vec<f64>,
+    inc: f64,
+    decay_factor: f64,
+
+    heap: Vec<usize>,
+    indices: Vec<usize>,
+
+    phases: Vec<bool>,
+    default_phase: bool,
+}
+
+impl BranchingHeuristics {
+    fn new(num_vars: usize, decay_factor: f64, default_phase: bool) -> Self {
+        let mut slf = Self {
+            activities: vec![0.0; num_vars],
+            inc: 1.0,
+            decay_factor,
+            heap: Vec::with_capacity(num_vars),
+            indices: vec![usize::MAX; num_vars],
+            phases: vec![default_phase; num_vars],
+            default_phase,
+        };
+
+        for i in 0..num_vars {
+            slf.heap.push(i);
+            slf.indices[i] = i;
         }
 
-        let mut levels: Vec<usize> = lemma.iter().map(|lit| self.sat_solver.level(lit.var()).expect("literal should have a decision level")).collect();
+        slf
+    }
 
-        levels.sort_unstable_by(|a, b| b.cmp(a));
+    fn sync_with_solver(&mut self, current_num_vars: usize) {
+        let known_vars = self.activities.len();
+        for var in known_vars..current_num_vars {
+            self.ensure_capacity(var);
+            self.insert_unassigned(var);
+        }
+    }
 
-        let max_level = levels[0];
+    fn bump_activity(&mut self, var: usize) {
+        self.ensure_capacity(var);
 
-        if max_level <= root_level {
-            return root_level;
+        self.activities[var] += self.inc;
+
+        if self.indices[var] != usize::MAX {
+            self.percolate_up(self.indices[var]);
         }
 
-        if levels.iter().filter(|&&l| l == max_level).count() == 1 { levels[1].max(root_level) } else { (max_level - 1).max(root_level) }
+        if self.activities[var] > 1e100 {
+            self.rescale_activities();
+        }
+    }
+
+    fn decay_activities(&mut self) {
+        self.inc /= self.decay_factor;
+    }
+
+    fn save_phase(&mut self, var: usize, polarity: bool) {
+        self.ensure_capacity(var);
+        self.phases[var] = polarity;
+    }
+
+    fn insert_unassigned(&mut self, var: usize) {
+        if self.indices[var] == usize::MAX {
+            let idx = self.heap.len();
+            self.indices[var] = idx;
+            self.heap.push(var);
+            self.percolate_up(idx);
+        }
+    }
+
+    fn pick_branching_literal<F>(&mut self, is_unassigned: F) -> Option<(usize, bool)>
+    where
+        F: Fn(usize) -> bool,
+    {
+        while !self.heap.is_empty() {
+            let max_var = self.heap[0];
+            self.indices[max_var] = usize::MAX;
+
+            let last_var = self.heap.pop().unwrap();
+            if !self.heap.is_empty() {
+                self.heap[0] = last_var;
+                self.indices[last_var] = 0;
+                self.percolate_down(0);
+            }
+
+            if is_unassigned(max_var) {
+                let polarity = self.phases[max_var];
+                return Some((max_var, polarity));
+            }
+        }
+        None
+    }
+
+    fn ensure_capacity(&mut self, var: usize) {
+        if var >= self.activities.len() {
+            let new_len = var + 1;
+            self.activities.resize(new_len, 0.0);
+            self.indices.resize(new_len, usize::MAX);
+            self.phases.resize(new_len, self.default_phase);
+        }
+    }
+
+    fn rescale_activities(&mut self) {
+        for act in &mut self.activities {
+            *act *= 1e-100;
+        }
+        self.inc *= 1e-100;
+    }
+
+    fn percolate_up(&mut self, mut i: usize) {
+        let var = self.heap[i];
+        let act = self.activities[var];
+
+        while i > 0 {
+            let parent_i = (i - 1) >> 1;
+            let parent_var = self.heap[parent_i];
+
+            if self.activities[parent_var] >= act {
+                break;
+            }
+
+            self.heap[i] = parent_var;
+            self.indices[parent_var] = i;
+            i = parent_i;
+        }
+
+        self.heap[i] = var;
+        self.indices[var] = i;
+    }
+
+    fn percolate_down(&mut self, mut i: usize) {
+        let var = self.heap[i];
+        let act = self.activities[var];
+        let len = self.heap.len();
+
+        loop {
+            let left_i = (i << 1) + 1;
+            if left_i >= len {
+                break;
+            }
+
+            let right_i = left_i + 1;
+            let mut child_i = left_i;
+
+            if right_i < len && self.activities[self.heap[right_i]] > self.activities[self.heap[left_i]] {
+                child_i = right_i;
+            }
+
+            let child_var = self.heap[child_i];
+            if act >= self.activities[child_var] {
+                break;
+            }
+
+            self.heap[i] = child_var;
+            self.indices[child_var] = i;
+            i = child_i;
+        }
+
+        self.heap[i] = var;
+        self.indices[var] = i;
     }
 }
 
