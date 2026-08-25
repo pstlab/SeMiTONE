@@ -71,17 +71,32 @@ impl SeMiTONE {
         EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
     }
 
+    /// Returns the current number of SAT variables allocated in the solver core.
+    ///
+    /// This includes user-visible Boolean variables and internal proxy variables
+    /// introduced while encoding compound constraints.
     pub fn num_vars(&self) -> usize {
         self.sat_solver.num_vars()
     }
 
+    /// Adds a clause directly to the SAT core.
+    ///
+    /// Returns `Ok(())` when the clause is accepted, or `Err(conflict_clause)` if
+    /// the clause is immediately contradictory at the current root context.
+    ///
+    /// This is useful for integrating external search/learning loops that produce
+    /// learned no-goods.
     pub fn add_clause(&mut self, clause: impl IntoIterator<Item = Lit>) -> Result<(), Vec<Lit>> {
         self.sat_solver.add_clause(clause)
     }
 
     /// Adds a Boolean constraint to the current solver context.
     ///
-    /// Returns `true` if the assertion was successfully added, or `false` if it led to an immediate conflict.
+    /// Returns `true` if the assertion was successfully added, or `false` if it
+    /// led to an immediate, trivial conflict while translating/asserting.
+    ///
+    /// Note that `true` does not imply global feasibility: call [`SeMiTONE::propagate`]
+    /// to detect conflicts that emerge after propagation through SAT/theory state.
     pub fn assert(&mut self, expr: &BoolExpr) -> bool {
         self.assert_internal(expr, true)
     }
@@ -483,6 +498,13 @@ impl SeMiTONE {
     }
 
     /// Adds a decision literal to the current search branch.
+    ///
+    /// This opens a new internal decision level and enqueues `lit` as a decision.
+    /// Returns `false` only if the literal is immediately inconsistent with the
+    /// current assignment.
+    ///
+    /// After a successful decision, call [`SeMiTONE::propagate`] to derive its
+    /// consequences and detect theory conflicts.
     pub fn decide(&mut self, lit: Lit) -> bool {
         self.sat_solver.push();
         self.lra_theory.push();
@@ -491,6 +513,9 @@ impl SeMiTONE {
     }
 
     /// Decides that an enum variable takes a specific value in the current branch.
+    ///
+    /// Convenience wrapper around [`SeMiTONE::decide`]. Returns `false` if the
+    /// decision cannot be enqueued consistently.
     pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> bool {
         let eq_expr = TheoryConstraint::EnumEq(
             match expr {
@@ -503,12 +528,17 @@ impl SeMiTONE {
         self.decide(lit)
     }
 
-    /// Returns the current decision level of the solver.
+    /// Returns the current internal decision level.
+    ///
+    /// Level `0` corresponds to the root level (no user decision applied).
     pub fn decision_level(&self) -> usize {
         self.sat_solver.decision_level()
     }
 
     /// Cancels all decisions and theory updates at levels deeper than `level`.
+    ///
+    /// This restores SAT/theory state to the requested level and drops pending
+    /// notifications beyond the restored trail.
     pub fn cancel_until(&mut self, level: usize) {
         self.sat_solver.cancel_until(level);
         self.lra_theory.cancel_until(level);
@@ -517,30 +547,43 @@ impl SeMiTONE {
     }
 
     /// Returns the trail suffix starting at `from_index`.
+    ///
+    /// Useful for external heuristics that need to inspect newly assigned literals.
     pub fn get_trail_delta(&self, from_index: usize) -> &[Lit] {
         &self.sat_solver.trail[from_index..]
     }
 
-    /// Returns the current size of the solver trail.
+    /// Returns the current size of the SAT assignment trail.
     pub fn current_trail_len(&self) -> usize {
         self.sat_solver.trail.len()
     }
 
-    /// Returns the size of the solver trail at a specific decision level.
+    /// Returns the trail length recorded at a specific decision level.
+    ///
+    /// If `level` is beyond the current number of levels, returns the current
+    /// trail length.
     pub fn get_trail_len_at_level(&self, level: usize) -> usize {
         if level < self.sat_solver.trail_lim.len() { self.sat_solver.trail_lim[level] } else { self.sat_solver.trail.len() }
     }
 
-    /// Returns a slice of the solver trail between two indices.
+    /// Returns a slice of the trail between `start` (inclusive) and `end` (exclusive).
     pub fn get_trail_slice(&self, start: usize, end: usize) -> &[Lit] {
         &self.sat_solver.trail[start..end]
     }
 
-    /// Returns the number of user-defined scopes currently active in the solver.
+    /// Returns the number of currently active user scopes (`push`/`pop`).
     pub fn user_scopes_len(&self) -> usize {
         self.user_scopes.len()
     }
 
+    /// Runs SAT + theory propagation until a fixed point or a conflict.
+    ///
+    /// Returns:
+    /// - `Ok(())` if the current branch is feasible after propagation.
+    /// - `Err((backtrack_level, no_good))` if a conflict is found.
+    ///
+    /// The returned `backtrack_level` is the suggested non-chronological level to
+    /// backtrack to, and `no_good` is a conflict explanation suitable for learning.
     pub fn propagate(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
@@ -642,7 +685,10 @@ impl SeMiTONE {
         }
     }
 
-    /// Opens a new incremental scope for assertions and decisions.
+    /// Opens a new incremental user scope for assertions and decisions.
+    ///
+    /// All constraints/decisions added after this call can be discarded by
+    /// [`SeMiTONE::pop`].
     pub fn push(&mut self) {
         let clauses_len = self.sat_solver.clauses.len();
 
@@ -654,7 +700,9 @@ impl SeMiTONE {
         self.user_scopes.push((current_level, clauses_len));
     }
 
-    /// Restores the previous solver scope and discards all assertions added since it was opened.
+    /// Restores the previous user scope and discards assertions added in it.
+    ///
+    /// If no user scope is open, this is a no-op.
     pub fn pop(&mut self) {
         if let Some((saved_level, saved_clauses_len)) = self.user_scopes.pop() {
             let target_level = saved_level - 1;
@@ -688,6 +736,11 @@ impl SeMiTONE {
         if levels.iter().filter(|&&l| l == max_level).count() == 1 { levels[1].max(root_level) } else { (max_level - 1).max(root_level) }
     }
 
+    /// Checks integrality of integer variables under the current rational model.
+    ///
+    /// Returns `Ok(())` if all integer variables are integral.
+    /// Otherwise returns `Err((backtrack_level, lemma))`, where `lemma` is either
+    /// a generated Gomory cut or a branching disjunction for branch-and-bound.
     pub fn check_ints(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         if let Err((var, frac_val)) = self.lra_theory.check_ints() {
             let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
