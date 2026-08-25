@@ -6,7 +6,7 @@ pub mod parser;
 mod proxy;
 pub mod rational;
 mod sat_solver;
-#[cfg(feature = "parser")]
+#[cfg(feature = "solver")]
 pub mod solver;
 
 use crate::{

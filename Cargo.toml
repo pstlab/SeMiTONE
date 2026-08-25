@@ -19,7 +19,8 @@ required-features = ["parser"]
 
 [features]
 default = ["parser"]
-parser = ["dep:smt2parser", "dep:num-traits"]
+solver = []
+parser = ["dep:smt2parser", "dep:num-traits", "solver"]
 
 [dependencies]
 rug = "1.30.0"
