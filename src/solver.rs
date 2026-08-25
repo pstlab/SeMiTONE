@@ -5,6 +5,12 @@ pub struct Solver {
     heuristic: BranchingHeuristics,
 }
 
+impl Default for Solver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Solver {
     pub fn new() -> Self {
         Self { smt: SmtSolver::new(), heuristic: BranchingHeuristics::new(0, 0.95, true) }
