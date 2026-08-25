@@ -101,7 +101,7 @@ impl<'a> SmtParser<'a> {
                 }
 
                 let bool_expr = self.translate_bool_term(&term);
-                if self.solver.smt.assert(&bool_expr).is_err() {
+                if !self.solver.smt.assert(&bool_expr) {
                     self.is_unsat = true;
                 }
             }
