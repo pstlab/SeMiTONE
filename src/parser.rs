@@ -1,7 +1,7 @@
 use crate::{
-    SmtSolver,
     ast::{ArithExpr, BoolExpr, Expr, add, and, eq_arith, ge, gt, le, lt, mul, or},
     rational::Rational,
+    solver::Solver,
 };
 use num_traits::ToPrimitive;
 use smt2parser::{CommandStream, concrete};
@@ -16,7 +16,7 @@ use std::{
 /// It reads commands from a string or file and writes SAT/UNSAT responses to the
 /// configured output sink.
 pub struct SmtParser<'a> {
-    pub solver: SmtSolver,
+    pub solver: Solver,
     bool_vars: HashMap<String, BoolExpr>,
     real_vars: HashMap<String, ArithExpr>,
     is_unsat: bool,
@@ -27,7 +27,7 @@ impl<'a> SmtParser<'a> {
     /// Creates a parser that writes the SMT response stream to the given writer.
     pub fn new(writer: &'a mut dyn Write) -> Self {
         Self {
-            solver: SmtSolver::new(),
+            solver: Solver::new(),
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
             is_unsat: false,
@@ -81,15 +81,15 @@ impl<'a> SmtParser<'a> {
 
                 match sort_name.as_str() {
                     "Bool" => {
-                        let v = self.solver.new_bool();
+                        let v = self.solver.smt.new_bool();
                         self.bool_vars.insert(name, v);
                     }
                     "Real" => {
-                        let v = self.solver.new_real();
+                        let v = self.solver.smt.new_real();
                         self.real_vars.insert(name, v);
                     }
                     "Int" => {
-                        let v = self.solver.new_int();
+                        let v = self.solver.smt.new_int();
                         self.real_vars.insert(name, v);
                     }
                     _ => panic!("Unsupported sort: {}", sort_name),
@@ -101,17 +101,19 @@ impl<'a> SmtParser<'a> {
                 }
 
                 let bool_expr = self.translate_bool_term(&term);
-                if self.solver.assert(&bool_expr).is_err() {
+                if self.solver.smt.assert(&bool_expr).is_err() {
                     self.is_unsat = true;
                 }
             }
             concrete::Command::CheckSat => {
                 if self.is_unsat {
                     writeln!(self.writer, "unsat").unwrap();
-                } else if self.solver.check_sat() {
-                    writeln!(self.writer, "sat").unwrap();
                 } else {
-                    writeln!(self.writer, "unsat").unwrap();
+                    match self.solver.check_sat() {
+                        Some(true) => writeln!(self.writer, "sat").unwrap(),
+                        Some(false) => writeln!(self.writer, "unsat").unwrap(),
+                        None => writeln!(self.writer, "unknown").unwrap(),
+                    }
                 }
             }
             concrete::Command::GetModel => {
@@ -124,14 +126,14 @@ impl<'a> SmtParser<'a> {
 
                 // Print Boolean assignments
                 for (name, var) in &self.bool_vars {
-                    if let Some(val) = self.solver.get_bool_val(var) {
+                    if let Some(val) = self.solver.smt.get_bool_val(var) {
                         writeln!(self.writer, "  (define-fun {} () Bool {})", name, if val { "true" } else { "false" }).unwrap();
                     }
                 }
 
                 // Print Real/Integer assignments
                 for (name, var) in &self.real_vars {
-                    if let Some(val) = self.solver.get_arith_val(var) {
+                    if let Some(val) = self.solver.smt.get_arith_val(var) {
                         let Rational::Finite(rat) = val.rational_part() else {
                             writeln!(self.writer, "  (define-fun {} () Real <non-finite>)", name).unwrap();
                             continue;
@@ -153,13 +155,13 @@ impl<'a> SmtParser<'a> {
             concrete::Command::Push { level } => {
                 let n = level.to_usize().unwrap_or_else(|| panic!("push level too large for usize: {}", level));
                 for _ in 0..n {
-                    self.solver.push();
+                    self.solver.smt.push();
                 }
             }
             concrete::Command::Pop { level } => {
                 let n = level.to_usize().unwrap_or_else(|| panic!("pop level too large for usize: {}", level));
                 for _ in 0..n {
-                    self.solver.pop();
+                    self.solver.smt.pop();
                 }
                 // Reset trivial unsat flag upon popping
                 self.is_unsat = false;

@@ -75,6 +75,10 @@ impl SmtSolver {
         self.sat_solver.num_vars()
     }
 
+    pub fn add_clause(&mut self, clause: impl IntoIterator<Item = Lit>) -> Result<(), Vec<Lit>> {
+        self.sat_solver.add_clause(clause)
+    }
+
     /// Adds a Boolean constraint to the current solver context.
     ///
     /// Returns `Ok(())` when the formula is consistent with the current theory
@@ -483,18 +487,15 @@ impl SmtSolver {
     }
 
     /// Adds a decision literal to the current search branch.
-    pub fn decide(&mut self, lit: Lit) -> Result<(), (usize, Vec<Lit>)> {
+    pub fn decide(&mut self, lit: Lit) -> bool {
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
-        if !self.sat_solver.enqueue_decision(lit) {
-            return Err((self.user_scopes.len(), vec![self.sat_solver.false_lit()]));
-        }
-        self.propagate()
+        self.sat_solver.enqueue_decision(lit)
     }
 
     /// Decides that an enum variable takes a specific value in the current branch.
-    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> Result<(), (usize, Vec<Lit>)> {
+    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> bool {
         let eq_expr = TheoryConstraint::EnumEq(
             match expr {
                 EnumExpr::Var(v) => *v,
@@ -504,6 +505,11 @@ impl SmtSolver {
         );
         let lit = self.get_or_create_proxy(eq_expr);
         self.decide(lit)
+    }
+
+    /// Returns the current decision level of the solver.
+    pub fn decision_level(&self) -> usize {
+        self.sat_solver.decision_level()
     }
 
     /// Cancels all decisions and theory updates at levels deeper than `level`.
@@ -540,8 +546,9 @@ impl SmtSolver {
     }
 
     pub fn propagate(&mut self) -> Result<(), (usize, Vec<Lit>)> {
+        let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
-            return Err((bt_level, conflict));
+            return Err((bt_level.max(base_level), conflict));
         }
 
         while self.notified_len < self.sat_solver.trail.len() {
@@ -558,14 +565,14 @@ impl SmtSolver {
                 };
 
                 if let Err(lemma) = theory_result {
-                    return Err((self.compute_backtrack_level(&lemma, self.user_scopes.len()), lemma));
+                    return Err((self.compute_backtrack_level(&lemma, base_level), lemma));
                 }
             }
             self.notified_len += 1;
         }
 
         if let Err(conflict) = self.lra_theory.check() {
-            return Err((self.compute_backtrack_level(&conflict, self.user_scopes.len()), conflict));
+            return Err((self.compute_backtrack_level(&conflict, base_level), conflict));
         }
         Ok(())
     }
@@ -685,278 +692,45 @@ impl SmtSolver {
         if levels.iter().filter(|&&l| l == max_level).count() == 1 { levels[1].max(root_level) } else { (max_level - 1).max(root_level) }
     }
 
-    /// Explores the search space to find a valid model or prove the formula is UNSAT.
-    pub fn check_sat(&mut self) -> bool {
-        let root_level = self.user_scopes.len();
-        let mut heuristic = BranchingHeuristics::new(self.sat_solver.num_vars(), 0.95, true);
+    pub fn check_ints(&mut self) -> Result<(), (usize, Vec<Lit>)> {
+        if let Err((var, frac_val)) = self.lra_theory.check_ints() {
+            let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
+            if let Some((cut_row, f0)) = self.lra_theory.generate_gomory_cut(var) {
+                let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
+                let bound = InfRational::new(Rational::Finite(f0), rug::Rational::from(0));
+                let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
 
-        loop {
-            // 1. PROPAGATION PHASE
-            // Process the trail until exhausted. If a conflict occurs, resolve it and loop back
-            // to propagate the newly learned clause immediately.
-            if let Err((bt_level, lemma)) = self.propagate() {
-                let bt_level = bt_level.max(root_level);
-                for lit in self.get_trail_delta(self.get_trail_len_at_level(bt_level)) {
-                    heuristic.save_phase(lit.var(), lit.sign());
-                    heuristic.insert_unassigned(lit.var());
-                }
-                self.cancel_until(bt_level);
-
-                let mut learned_clause = Vec::with_capacity(lemma.len());
-                for lit in lemma {
-                    learned_clause.push(lit);
-                    heuristic.bump_activity(lit.var());
-                }
-
-                heuristic.decay_activities();
-
-                if self.sat_solver.add_clause(learned_clause).is_err() {
-                    return false;
-                }
-
-                // Crucial: loop back to propagate the learned unit clause BEFORE making any decisions
-                continue;
+                let lemma = vec![cut_lit];
+                let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
+                return Err((base_level, lemma));
             }
 
-            // 2. CHECK UNASSIGNED VARIABLES
-            heuristic.sync_with_solver(self.sat_solver.num_vars());
-            let next_decision = heuristic.pick_branching_literal(|var| self.sat_solver.value(var).is_none());
+            let Rational::Finite(inner_frac) = frac_val else {
+                unreachable!("Fractional variable in Branch & Bound must be finite");
+            };
 
-            // 3. DECISION OR THEORY LATE-CHECK PHASE
-            if let Some((var, polarity)) = next_decision {
-                // The trail is completely flushed, safe to guess
-                self.sat_solver.push();
-                self.lra_theory.push();
-                self.enum_theory.push();
-                if !self.sat_solver.enqueue_decision(Lit::new(var, polarity)) {
-                    unreachable!()
-                }
-            } else {
-                // All variables assigned, evaluate late theory checks (e.g., integers)
-                if let Err((var, frac_val)) = self.lra_theory.check_ints() {
-                    // --- GOMORY CUTS ---
-                    if let Some((cut_row, f0)) = self.lra_theory.generate_gomory_cut(var) {
-                        let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
-                        let bound = InfRational::new(Rational::Finite(f0), rug::Rational::from(0));
-                        let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
+            let mut floor_val = inner_frac.clone();
+            floor_val.floor_mut();
+            let mut ceil_val = inner_frac.clone();
+            ceil_val.ceil_mut();
 
-                        for lit in self.get_trail_delta(self.get_trail_len_at_level(root_level)) {
-                            heuristic.save_phase(lit.var(), lit.sign());
-                            heuristic.insert_unassigned(lit.var());
-                        }
-                        self.cancel_until(root_level);
+            let ub = InfRational::new(Rational::Finite(floor_val), rug::Rational::from(0));
+            let lb = InfRational::new(Rational::Finite(ceil_val), rug::Rational::from(0));
 
-                        if self.sat_solver.add_clause([cut_lit]).is_err() {
-                            return false;
-                        }
+            let lit_ub = self.get_or_create_proxy(TheoryConstraint::LraUb(var, ub));
+            let lit_lb = self.get_or_create_proxy(TheoryConstraint::LraLb(var, lb));
 
-                        continue;
-                    }
-
-                    // --- BRANCH & BOUND ---
-                    let Rational::Finite(inner_frac) = frac_val else {
-                        unreachable!("Fractional variable in Branch & Bound must be finite");
-                    };
-
-                    let mut floor_val = inner_frac.clone();
-                    floor_val.floor_mut();
-                    let mut ceil_val = inner_frac.clone();
-                    ceil_val.ceil_mut();
-
-                    let ub = InfRational::new(Rational::Finite(floor_val), rug::Rational::from(0));
-                    let lb = InfRational::new(Rational::Finite(ceil_val), rug::Rational::from(0));
-
-                    let lit_ub = self.get_or_create_proxy(TheoryConstraint::LraUb(var, ub));
-                    let lit_lb = self.get_or_create_proxy(TheoryConstraint::LraLb(var, lb));
-
-                    for lit in self.get_trail_delta(self.get_trail_len_at_level(root_level)) {
-                        heuristic.save_phase(lit.var(), lit.sign());
-                        heuristic.insert_unassigned(lit.var());
-                    }
-                    self.cancel_until(root_level);
-
-                    if self.sat_solver.add_clause([lit_ub, lit_lb]).is_err() {
-                        return false;
-                    }
-                    continue;
-                }
-
-                // No unassigned variables and no theory violations
-                return true;
-            }
+            let lemma = vec![lit_ub, lit_lb];
+            return Err((base_level, lemma));
         }
-    }
-}
-
-struct BranchingHeuristics {
-    activities: Vec<f64>,
-    inc: f64,
-    decay_factor: f64,
-
-    heap: Vec<usize>,
-    indices: Vec<usize>,
-
-    phases: Vec<bool>,
-    default_phase: bool,
-}
-
-impl BranchingHeuristics {
-    fn new(num_vars: usize, decay_factor: f64, default_phase: bool) -> Self {
-        let mut slf = Self {
-            activities: vec![0.0; num_vars],
-            inc: 1.0,
-            decay_factor,
-            heap: Vec::with_capacity(num_vars),
-            indices: vec![usize::MAX; num_vars],
-            phases: vec![default_phase; num_vars],
-            default_phase,
-        };
-
-        for i in 0..num_vars {
-            slf.heap.push(i);
-            slf.indices[i] = i;
-        }
-
-        slf
-    }
-
-    fn sync_with_solver(&mut self, current_num_vars: usize) {
-        let known_vars = self.activities.len();
-        for var in known_vars..current_num_vars {
-            self.ensure_capacity(var);
-            self.insert_unassigned(var);
-        }
-    }
-
-    fn bump_activity(&mut self, var: usize) {
-        self.ensure_capacity(var);
-
-        self.activities[var] += self.inc;
-
-        if self.indices[var] != usize::MAX {
-            self.percolate_up(self.indices[var]);
-        }
-
-        if self.activities[var] > 1e100 {
-            self.rescale_activities();
-        }
-    }
-
-    fn decay_activities(&mut self) {
-        self.inc /= self.decay_factor;
-    }
-
-    fn save_phase(&mut self, var: usize, polarity: bool) {
-        self.ensure_capacity(var);
-        self.phases[var] = polarity;
-    }
-
-    fn insert_unassigned(&mut self, var: usize) {
-        if self.indices[var] == usize::MAX {
-            let idx = self.heap.len();
-            self.indices[var] = idx;
-            self.heap.push(var);
-            self.percolate_up(idx);
-        }
-    }
-
-    fn pick_branching_literal<F>(&mut self, is_unassigned: F) -> Option<(usize, bool)>
-    where
-        F: Fn(usize) -> bool,
-    {
-        while !self.heap.is_empty() {
-            let max_var = self.heap[0];
-            self.indices[max_var] = usize::MAX;
-
-            let last_var = self.heap.pop().unwrap();
-            if !self.heap.is_empty() {
-                self.heap[0] = last_var;
-                self.indices[last_var] = 0;
-                self.percolate_down(0);
-            }
-
-            if is_unassigned(max_var) {
-                let polarity = self.phases[max_var];
-                return Some((max_var, polarity));
-            }
-        }
-        None
-    }
-
-    fn ensure_capacity(&mut self, var: usize) {
-        if var >= self.activities.len() {
-            let new_len = var + 1;
-            self.activities.resize(new_len, 0.0);
-            self.indices.resize(new_len, usize::MAX);
-            self.phases.resize(new_len, self.default_phase);
-        }
-    }
-
-    fn rescale_activities(&mut self) {
-        for act in &mut self.activities {
-            *act *= 1e-100;
-        }
-        self.inc *= 1e-100;
-    }
-
-    fn percolate_up(&mut self, mut i: usize) {
-        let var = self.heap[i];
-        let act = self.activities[var];
-
-        while i > 0 {
-            let parent_i = (i - 1) >> 1;
-            let parent_var = self.heap[parent_i];
-
-            if self.activities[parent_var] >= act {
-                break;
-            }
-
-            self.heap[i] = parent_var;
-            self.indices[parent_var] = i;
-            i = parent_i;
-        }
-
-        self.heap[i] = var;
-        self.indices[var] = i;
-    }
-
-    fn percolate_down(&mut self, mut i: usize) {
-        let var = self.heap[i];
-        let act = self.activities[var];
-        let len = self.heap.len();
-
-        loop {
-            let left_i = (i << 1) + 1;
-            if left_i >= len {
-                break;
-            }
-
-            let right_i = left_i + 1;
-            let mut child_i = left_i;
-
-            if right_i < len && self.activities[self.heap[right_i]] > self.activities[self.heap[left_i]] {
-                child_i = right_i;
-            }
-
-            let child_var = self.heap[child_i];
-            if act >= self.activities[child_var] {
-                break;
-            }
-
-            self.heap[i] = child_var;
-            self.indices[child_var] = i;
-            i = child_i;
-        }
-
-        self.heap[i] = var;
-        self.indices[var] = i;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{add, and, cst_arith, cst_enum, cst_frac, eq_arith, eq_enum, ge, gt, le, lt, min, mul, or};
+    use crate::ast::{add, and, cst_arith, cst_enum, eq_arith, eq_enum, ge, gt, le, lt, or};
 
     #[test]
     fn test_pure_sat_resolution() {
@@ -1018,27 +792,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simplex_system_sat() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-        let y = solver.new_real();
-        let z = solver.new_real();
-
-        // 2x - y + z == 10
-        let exp1 = add([mul([cst_arith(2), x.clone()]), mul([cst_arith(-1), y.clone()]), z.clone()]);
-        let eq1 = eq_arith(exp1, cst_arith(10));
-
-        // x > 0, y > 0, z > 0
-        let bnd = and([gt(x.clone(), cst_arith(0)), gt(y.clone(), cst_arith(0)), gt(z.clone(), cst_arith(0))]);
-
-        let result = solver.assert(&and([eq1, bnd]));
-        assert!(result.is_ok());
-
-        // Triggers the search loop to assign values to the slack variables
-        assert!(solver.check_sat(), "The system has valid real solutions and should be SAT");
-    }
-
-    #[test]
     fn test_constant_arithmetic_evaluations() {
         let mut solver = SmtSolver::new();
 
@@ -1083,53 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tseitin_nested_boolean_logic() {
-        let mut solver = SmtSolver::new();
-        let a = solver.new_bool();
-        let b = solver.new_bool();
-
-        let nested_and = and([a.clone(), b.clone()]);
-        let nested_or = or([!a.clone(), BoolExpr::False]);
-
-        let root_or = or([nested_and, nested_or, BoolExpr::True]);
-
-        assert!(solver.assert(&root_or).is_ok());
-        assert!(solver.check_sat());
-    }
-
-    #[test]
-    fn test_tseitin_nested_theory_atoms() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-
-        let atom_lt = lt(x.clone(), cst_arith(5));
-        let atom_ge = ge(x.clone(), cst_arith(10));
-        let atom_le = le(x.clone(), cst_arith(0));
-        let atom_gt = gt(x.clone(), cst_arith(20));
-
-        let disjunction1 = or([atom_lt, atom_ge]);
-        let disjunction2 = or([atom_le, atom_gt]);
-
-        assert!(solver.assert(&disjunction1).is_ok());
-        assert!(solver.assert(&disjunction2).is_ok());
-        assert!(solver.check_sat());
-    }
-
-    #[test]
-    fn test_encode_eq_booleans() {
-        let mut solver = SmtSolver::new();
-        let a = solver.new_bool();
-        let b = solver.new_bool();
-
-        let eq_expr = BoolExpr::Eq(Box::new(Expr::Bool(a.clone())), Box::new(Expr::Bool(b.clone())));
-
-        assert!(solver.assert(&and([eq_expr, a])).is_ok());
-        assert!(solver.check_sat());
-
-        assert_eq!(solver.get_bool_val(&b), Some(true));
-    }
-
-    #[test]
     #[should_panic(expected = "Type mismatch in Eq")]
     fn test_encode_eq_type_mismatch_panic() {
         let mut solver = SmtSolver::new();
@@ -1139,55 +845,6 @@ mod tests {
         let bad_eq = BoolExpr::Eq(Box::new(Expr::Bool(a)), Box::new(Expr::Arith(x)));
 
         let _ = solver.assert(&bad_eq);
-    }
-
-    #[test]
-    fn test_dpllt_backtracking_over_theory() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-
-        // (x < 0 ∨ x > 10) ∧ (x > 5) ∧ (x < 15)
-        let expr = and([or([lt(x.clone(), cst_arith(0)), gt(x.clone(), cst_arith(10))]), gt(x.clone(), cst_arith(5)), lt(x.clone(), cst_arith(15))]);
-
-        let result = solver.assert(&expr);
-        assert!(result.is_ok());
-
-        solver.propagate().expect("Initial propagation should succeed");
-
-        // check_sat will guess (x < 0), the theory will reject it against (x > 5),
-        // the solver will learn the lemma, backtrack, and pick (x > 10) instead.
-        assert!(solver.check_sat(), "Solver must backtrack from the x < 0 branch and find the SAT path");
-    }
-
-    #[test]
-    fn test_dpllt_negated_equality_branching() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-        let y = solver.new_real();
-
-        let not_eq = !eq_arith(x.clone(), y.clone());
-
-        let force_lt = and([lt(x.clone(), cst_arith(10)), gt(y.clone(), cst_arith(20))]);
-
-        let expr = and([not_eq, force_lt]);
-
-        let result = solver.assert(&expr);
-        assert!(result.is_ok());
-
-        // The solver will branch on the disjunction, fail one path due to LRA bounds,
-        // and backtrack to validate the other.
-        assert!(solver.check_sat(), "Solver must resolve negated equality branching correctly");
-    }
-
-    #[test]
-    fn test_enum_basic_sat() {
-        let mut solver = SmtSolver::new();
-        let e = solver.new_enum(vec![1, 2, 3]);
-
-        let expr = eq_enum(e, cst_enum(2));
-
-        assert!(solver.assert(&expr).is_ok());
-        assert!(solver.check_sat(), "The solver should find a valid assignment for the enum variable");
     }
 
     #[test]
@@ -1210,149 +867,5 @@ mod tests {
         let expr = and(vec![!(eq_enum(e.clone(), cst_enum(1))), !(eq_enum(e, cst_enum(2)))]);
 
         assert!(solver.assert(&expr).is_err());
-    }
-
-    #[test]
-    fn test_enum_var_to_var_equality() {
-        let mut solver = SmtSolver::new();
-        let e1 = solver.new_enum(vec![1, 2, 3]);
-        let e2 = solver.new_enum(vec![3, 4, 5]);
-
-        let eq_expr = eq_enum(e1.clone(), e2.clone());
-
-        assert!(solver.assert(&eq_expr).is_ok());
-        assert!(solver.check_sat(), "Solver should find a valid assignment for e1 and e2 where they are equal (SAT)");
-
-        let not_3 = !(eq_enum(e1.clone(), cst_enum(3)));
-        assert!(solver.assert(&not_3).is_err());
-    }
-
-    #[test]
-    fn test_enum_dpllt_branching() {
-        let mut solver = SmtSolver::new();
-        let e = solver.new_enum(vec![1, 2, 3]);
-
-        let expr = and([or([eq_enum(e.clone(), cst_enum(1)), eq_enum(e.clone(), cst_enum(2))]), !(eq_enum(e.clone(), cst_enum(1)))]);
-
-        assert!(solver.assert(&expr).is_ok());
-
-        assert!(solver.check_sat(), "Solver should backtrack and explore e == 2 (SAT)");
-    }
-
-    #[test]
-    fn test_integer_branch_and_bound_unsat() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_int();
-
-        let eq_expr = eq_arith(mul([cst_arith(2), x.clone()]), cst_arith(3));
-
-        assert!(solver.assert(&eq_expr).is_ok());
-
-        assert!(!solver.check_sat(), "There is no integer solution to 2x = 3, should be UNSAT");
-    }
-
-    #[test]
-    fn test_integer_branch_and_bound_sat() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_int();
-
-        let expr = and([gt(x.clone(), cst_frac(12, 10)), lt(x.clone(), cst_frac(28, 10))]);
-
-        assert!(solver.assert(&expr).is_ok());
-
-        assert!(solver.check_sat(), "There is an integer solution to the constraints, should be SAT");
-    }
-
-    #[test]
-    fn test_min_constraint_sat_and_model_extraction() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-        let y = solver.new_real();
-        let z = solver.new_real();
-
-        // x = 15, y = 10
-        let eq_x = eq_arith(x.clone(), cst_arith(15));
-        let eq_y = eq_arith(y.clone(), cst_arith(10));
-
-        // z = min(x, y)
-        let min_expr = min(z.clone(), [x.clone(), y.clone()]);
-
-        let expr = and([eq_x, eq_y, min_expr]);
-        assert!(solver.assert(&expr).is_ok());
-
-        // DPLL(T) should resolve this and guess z = 10
-        assert!(solver.check_sat(), "The min constraint must be SAT");
-
-        // Verify the extracted model
-        assert_eq!(solver.get_arith_val(&z), Some(InfRational::new(Rational::Finite(rug::Rational::from(10)), rug::Rational::from(0))), "The min constraint should resolve to z = 10");
-    }
-
-    #[test]
-    fn test_push_pop_incremental_scopes() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_real();
-
-        // x >= 10
-        assert!(solver.assert(&ge(x.clone(), cst_arith(10))).is_ok());
-        assert!(solver.check_sat(), "x >= 10 is SAT");
-
-        solver.push();
-        // x <= 20
-        assert!(solver.assert(&le(x.clone(), cst_arith(20))).is_ok());
-        assert!(solver.check_sat(), "x >= 10 and x <= 20 is SAT");
-
-        solver.push();
-        // x <= 5
-        assert!(solver.assert(&le(x.clone(), cst_arith(5))).is_err(), "x >= 10 and x <= 5 is UNSAT");
-
-        solver.pop();
-        assert!(solver.check_sat(), "x >= 10 and x <= 20 is SAT after popping the last scope");
-
-        let val = solver.get_arith_val(&x).unwrap();
-        assert!(val >= InfRational::new(Rational::Finite(rug::Rational::from(10)), rug::Rational::from(0)));
-        assert!(val <= InfRational::new(Rational::Finite(rug::Rational::from(20)), rug::Rational::from(0)));
-
-        solver.pop();
-        assert!(solver.assert(&ge(x.clone(), cst_arith(50))).is_ok());
-        assert!(solver.check_sat(), "x >= 50 is SAT after popping all scopes");
-    }
-
-    #[test]
-    fn test_gomory_cut_generation_unsat() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_int();
-        let y = solver.new_int();
-
-        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(3), y.clone()])]), cst_arith(10));
-
-        // Gomory cuts require variables to be bounded to effectively prune.
-        // Without bounds, the cut becomes a tautology, leading to stagnation.
-        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
-
-        assert!(solver.assert(&and([eq_expr, bounds])).is_ok());
-
-        assert!(!solver.check_sat(), "3x + 3y = 10 has no integer solutions, must be UNSAT");
-    }
-
-    #[test]
-    fn test_gomory_cut_generation_sat() {
-        let mut solver = SmtSolver::new();
-        let x = solver.new_int();
-        let y = solver.new_int();
-
-        // 3x + 4y = 10, with x >= 0 and y >= 0
-        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(4), y.clone()])]), cst_arith(10));
-
-        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
-
-        assert!(solver.assert(&and([eq_expr, bounds])).is_ok());
-
-        assert!(solver.check_sat(), "Il sistema ha una soluzione intera e deve essere SAT");
-
-        let val_x = solver.get_arith_val(&x).expect("x deve avere un valore");
-        let val_y = solver.get_arith_val(&y).expect("y deve avere un valore");
-
-        assert_eq!(val_x.rational_part().clone(), Rational::Finite(rug::Rational::from(2)));
-        assert_eq!(val_y.rational_part().clone(), Rational::Finite(rug::Rational::from(1)));
     }
 }
