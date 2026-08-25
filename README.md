@@ -32,10 +32,16 @@ SeMiTONE is designed for domains that require tightly coupled, custom logic reas
 
 ## 🛠️ Quick Look
 
-SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. Below is a conceptual example of how constraints are loaded and propagated:
+SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. A typical interaction is:
+
+1. `assert` formulas (returns `false` on trivial, immediate inconsistency),
+2. call `propagate` (returns `Ok(())` if feasible, or `Err((backtrack_level, no_good))` on conflict),
+3. choose a branch with `decide` (or `decide_enum`), then call `propagate` again.
+
+Below is a compact conceptual example:
 
 ```rust
-use semitone::smt::{SeMiTONE, ast::*};
+use semitone::{SeMiTONE, ast::*};
 
 let mut solver = SeMiTONE::new();
 
@@ -48,11 +54,34 @@ let state = solver.new_enum(vec![1, 2, 3]);
 let eq_expr = eq_arith(add([x.clone(), y.clone()]), cst_arith(10));
 let gt_expr = gt(x, cst_arith(6));
 
-// Assert constraints to the network
+// 1) Assert constraints into the network.
+//    `assert` returns false only for immediate/trivial inconsistencies.
 let system = and([eq_expr, gt_expr]);
-match solver.assert(&system) {
-    Ok(_) => println!("Constraints are feasible. Ready for search!"),
-    Err((level, conflict_lemma)) => println!("Conflict detected at level {}!", level),
+if !solver.assert(&system) {
+  println!("Trivial inconsistency detected during assert.");
+} else {
+  // 2) Propagate current consequences.
+  match solver.propagate() {
+    Ok(()) => {
+      // 3) Make a decision and propagate again.
+      // `decide_enum` is a convenience wrapper around a SAT-level decision.
+      if solver.decide_enum(&state, 2) {
+        match solver.propagate() {
+          Ok(()) => println!("Branch is still feasible after the decision."),
+          Err((level, no_good)) => {
+            println!("Conflict after decide: backtrack to level {}", level);
+            println!("No-good: {:?}", no_good);
+          }
+        }
+      } else {
+        println!("Decision was immediately inconsistent.");
+      }
+    }
+    Err((level, no_good)) => {
+      println!("Conflict during propagation: backtrack to level {}", level);
+      println!("No-good: {:?}", no_good);
+    }
+  }
 }
 ```
 
