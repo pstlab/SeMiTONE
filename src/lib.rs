@@ -71,13 +71,17 @@ impl SmtSolver {
         EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
     }
 
+    pub fn num_vars(&self) -> usize {
+        self.sat_solver.num_vars()
+    }
+
     /// Adds a Boolean constraint to the current solver context.
     ///
     /// Returns `Ok(())` when the formula is consistent with the current theory
     /// state, or an error containing the backtracking scope and a conflict witness.
-    pub fn assert(&mut self, expr: &BoolExpr) -> Result<(), (usize, Vec<BoolExpr>)> {
+    pub fn assert(&mut self, expr: &BoolExpr) -> Result<(), (usize, Vec<Lit>)> {
         if !self.assert_internal(expr, true) {
-            return Err((self.user_scopes.len(), vec![BoolExpr::False]));
+            return Err((self.user_scopes.len(), vec![self.sat_solver.false_lit()]));
         }
         self.propagate()
     }
@@ -478,29 +482,19 @@ impl SmtSolver {
         }
     }
 
-    fn build_conflict(lemma: Vec<Lit>) -> Vec<BoolExpr> {
-        lemma
-            .into_iter()
-            .map(|lit| {
-                let var = BoolExpr::Var(lit.var());
-                if lit.sign() { BoolExpr::Not(Box::new(var)) } else { var }
-            })
-            .collect()
-    }
-
     /// Adds a decision literal to the current search branch.
-    pub fn decide(&mut self, lit: Lit) -> Result<(), (usize, Vec<BoolExpr>)> {
+    pub fn decide(&mut self, lit: Lit) -> Result<(), (usize, Vec<Lit>)> {
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
         if !self.sat_solver.enqueue_decision(lit) {
-            return Err((self.user_scopes.len(), vec![BoolExpr::False]));
+            return Err((self.user_scopes.len(), vec![self.sat_solver.false_lit()]));
         }
         self.propagate()
     }
 
     /// Decides that an enum variable takes a specific value in the current branch.
-    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> Result<(), (usize, Vec<BoolExpr>)> {
+    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> Result<(), (usize, Vec<Lit>)> {
         let eq_expr = TheoryConstraint::EnumEq(
             match expr {
                 EnumExpr::Var(v) => *v,
@@ -545,9 +539,9 @@ impl SmtSolver {
         self.user_scopes.len()
     }
 
-    fn propagate(&mut self) -> Result<(), (usize, Vec<BoolExpr>)> {
+    pub fn propagate(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
-            return Err((bt_level, Self::build_conflict(conflict)));
+            return Err((bt_level, conflict));
         }
 
         while self.notified_len < self.sat_solver.trail.len() {
@@ -564,14 +558,14 @@ impl SmtSolver {
                 };
 
                 if let Err(lemma) = theory_result {
-                    return Err((self.compute_backtrack_level(&lemma, self.user_scopes.len()), Self::build_conflict(lemma)));
+                    return Err((self.compute_backtrack_level(&lemma, self.user_scopes.len()), lemma));
                 }
             }
             self.notified_len += 1;
         }
 
         if let Err(conflict) = self.lra_theory.check() {
-            return Err((self.compute_backtrack_level(&conflict, self.user_scopes.len()), Self::build_conflict(conflict)));
+            return Err((self.compute_backtrack_level(&conflict, self.user_scopes.len()), conflict));
         }
         Ok(())
     }
@@ -709,8 +703,7 @@ impl SmtSolver {
                 self.cancel_until(bt_level);
 
                 let mut learned_clause = Vec::with_capacity(lemma.len());
-                for expr in lemma {
-                    let lit = self.encode_bool(&expr);
+                for lit in lemma {
                     learned_clause.push(lit);
                     heuristic.bump_activity(lit.var());
                 }
