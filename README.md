@@ -35,9 +35,9 @@ SeMiTONE is designed for domains that require tightly coupled, custom logic reas
 SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. Below is a conceptual example of how constraints are loaded and propagated:
 
 ```rust
-use semitone::smt::{SmtSolver, ast::*};
+use semitone::smt::{SeMiTONE, ast::*};
 
-let mut solver = SmtSolver::new();
+let mut solver = SeMiTONE::new();
 
 // Declare variables across different theories
 let x = solver.new_real();

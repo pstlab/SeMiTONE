@@ -1,7 +1,7 @@
-use crate::{SmtSolver, ast::BoolExpr, sat_solver::Lit};
+use crate::{SeMiTONE, ast::BoolExpr, sat_solver::Lit};
 
 pub struct Solver {
-    pub smt: SmtSolver,
+    pub smt: SeMiTONE,
     heuristic: BranchingHeuristics,
 }
 
@@ -13,7 +13,7 @@ impl Default for Solver {
 
 impl Solver {
     pub fn new() -> Self {
-        Self { smt: SmtSolver::new(), heuristic: BranchingHeuristics::new(0, 0.95, true) }
+        Self { smt: SeMiTONE::new(), heuristic: BranchingHeuristics::new(0, 0.95, true) }
     }
 
     pub fn check_sat(&mut self) -> Option<bool> {

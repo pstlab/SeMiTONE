@@ -23,7 +23,7 @@ use rug::Assign;
 ///
 /// The solver combines a SAT core with theory propagation for linear rational
 /// arithmetic and finite-domain enum reasoning.
-pub struct SmtSolver {
+pub struct SeMiTONE {
     registry: ProxyRegistry,
     sat_solver: SatSolver,
     lra_theory: LraTheory,
@@ -32,13 +32,13 @@ pub struct SmtSolver {
     user_scopes: Vec<(usize, usize)>,
 }
 
-impl Default for SmtSolver {
+impl Default for SeMiTONE {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SmtSolver {
+impl SeMiTONE {
     /// Creates a new empty solver instance.
     pub fn new() -> Self {
         Self {
@@ -81,13 +81,9 @@ impl SmtSolver {
 
     /// Adds a Boolean constraint to the current solver context.
     ///
-    /// Returns `Ok(())` when the formula is consistent with the current theory
-    /// state, or an error containing the backtracking scope and a conflict witness.
-    pub fn assert(&mut self, expr: &BoolExpr) -> Result<(), (usize, Vec<Lit>)> {
-        if !self.assert_internal(expr, true) {
-            return Err((self.user_scopes.len(), vec![self.sat_solver.false_lit()]));
-        }
-        self.propagate()
+    /// Returns `true` if the assertion was successfully added, or `false` if it led to an immediate conflict.
+    pub fn assert(&mut self, expr: &BoolExpr) -> bool {
+        self.assert_internal(expr, true)
     }
 
     fn assert_internal(&mut self, expr: &BoolExpr, polarity: bool) -> bool {
@@ -734,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_pure_sat_resolution() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
 
         let a = solver.new_bool();
         let b = solver.new_bool();
@@ -744,37 +740,37 @@ mod tests {
         // With ¬A, clause (A ∨ B) forces B; then B forces both C and ¬C.
         let expr = and([or([a.clone(), b.clone()]), or([!b.clone(), c.clone()]), or([!b, !c]), !a]);
 
-        let result = solver.assert(&expr);
-        assert!(result.is_err());
+        let _ = solver.assert(&expr);
+        assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
     fn test_early_bounding_unsat() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let x = solver.new_real();
 
         // x > 10 ∧ x < 5
         let expr = and([gt(x.clone(), cst_arith(10)), lt(x, cst_arith(5))]);
 
         let result = solver.assert(&expr);
-        assert!(result.is_err());
+        assert!(!result, "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
     fn test_equality_mutually_exclusive() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let x = solver.new_real();
 
         // x == 5 ∧ x > 6
         let expr = and([eq_arith(x.clone(), cst_arith(5)), gt(x, cst_arith(6))]);
 
         let result = solver.assert(&expr);
-        assert!(result.is_err());
+        assert!(!result, "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
     fn test_simplex_system_unsat() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let x = solver.new_real();
         let y = solver.new_real();
 
@@ -787,58 +783,58 @@ mod tests {
 
         let expr = and([eq_expr, gt_x, gt_y]);
 
-        let result = solver.assert(&expr);
-        assert!(result.is_err());
+        let _ = solver.assert(&expr);
+        assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
     fn test_constant_arithmetic_evaluations() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
 
-        assert!(solver.assert(&lt(cst_arith(5), cst_arith(10))).is_ok());
-        assert!(solver.assert(&le(cst_arith(5), cst_arith(5))).is_ok());
-        assert!(solver.assert(&ge(cst_arith(10), cst_arith(5))).is_ok());
-        assert!(solver.assert(&gt(cst_arith(10), cst_arith(5))).is_ok());
+        assert!(solver.assert(&lt(cst_arith(5), cst_arith(10))));
+        assert!(solver.assert(&le(cst_arith(5), cst_arith(5))));
+        assert!(solver.assert(&ge(cst_arith(10), cst_arith(5))));
+        assert!(solver.assert(&gt(cst_arith(10), cst_arith(5))));
 
-        assert!(solver.assert(&lt(cst_arith(10), cst_arith(5))).is_err());
-        assert!(solver.assert(&le(cst_arith(10), cst_arith(5))).is_err());
-        assert!(solver.assert(&ge(cst_arith(5), cst_arith(10))).is_err());
-        assert!(solver.assert(&gt(cst_arith(5), cst_arith(10))).is_err());
+        assert!(!solver.assert(&lt(cst_arith(10), cst_arith(5))));
+        assert!(!solver.assert(&le(cst_arith(10), cst_arith(5))));
+        assert!(!solver.assert(&ge(cst_arith(5), cst_arith(10))));
+        assert!(!solver.assert(&gt(cst_arith(5), cst_arith(10))));
 
-        assert!(solver.assert(&!lt(cst_arith(10), cst_arith(5))).is_ok());
-        assert!(solver.assert(&!lt(cst_arith(5), cst_arith(10))).is_err());
+        assert!(solver.assert(&!lt(cst_arith(10), cst_arith(5))));
+        assert!(!solver.assert(&!lt(cst_arith(5), cst_arith(10))));
     }
 
     #[test]
     fn test_negated_variable_inequalities() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let x = solver.new_real();
 
         solver.push();
-        assert!(solver.assert(&!lt(x.clone(), cst_arith(5))).is_ok());
-        assert!(solver.assert(&lt(x.clone(), cst_arith(4))).is_err());
+        assert!(solver.assert(&!lt(x.clone(), cst_arith(5))));
+        assert!(!solver.assert(&lt(x.clone(), cst_arith(4))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!le(x.clone(), cst_arith(5))).is_ok());
-        assert!(solver.assert(&le(x.clone(), cst_arith(5))).is_err());
+        assert!(solver.assert(&!le(x.clone(), cst_arith(5))));
+        assert!(!solver.assert(&le(x.clone(), cst_arith(5))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!ge(x.clone(), cst_arith(5))).is_ok());
-        assert!(solver.assert(&ge(x.clone(), cst_arith(5))).is_err());
+        assert!(solver.assert(&!ge(x.clone(), cst_arith(5))));
+        assert!(!solver.assert(&ge(x.clone(), cst_arith(5))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!gt(x.clone(), cst_arith(5))).is_ok());
-        assert!(solver.assert(&gt(x.clone(), cst_arith(5))).is_err());
+        assert!(solver.assert(&!gt(x.clone(), cst_arith(5))));
+        assert!(!solver.assert(&gt(x.clone(), cst_arith(5))));
         solver.pop();
     }
 
     #[test]
     #[should_panic(expected = "Type mismatch in Eq")]
     fn test_encode_eq_type_mismatch_panic() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let a = solver.new_bool();
         let x = solver.new_real();
 
@@ -849,23 +845,24 @@ mod tests {
 
     #[test]
     fn test_enum_out_of_domain_unsat() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let e = solver.new_enum(vec![1, 2]);
 
         let expr = eq_enum(e, cst_enum(3));
 
-        let result = solver.assert(&expr);
-        assert!(result.is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
+        let _ = solver.assert(&expr);
+        assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
     }
 
     #[test]
     fn test_enum_exhaustive_denial_integration() {
-        let mut solver = SmtSolver::new();
+        let mut solver = SeMiTONE::new();
         let e = solver.new_enum(vec![1, 2]);
 
         // (e != 1) AND (e != 2)
         let expr = and(vec![!(eq_enum(e.clone(), cst_enum(1))), !(eq_enum(e, cst_enum(2)))]);
 
-        assert!(solver.assert(&expr).is_err());
+        let _ = solver.assert(&expr);
+        assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
     }
 }
