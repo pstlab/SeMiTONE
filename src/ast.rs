@@ -7,15 +7,15 @@ pub enum Expr {
     Arith(ArithExpr),
 }
 
-impl From<bool> for Expr {
-    fn from(b: bool) -> Self {
-        Expr::Bool(BoolExpr::from(b))
+impl Expr {
+    pub fn eq(self, other: Expr) -> BoolExpr {
+        BoolExpr::Eq(Box::new(self), Box::new(other))
     }
 }
 
-impl From<rug::Rational> for Expr {
-    fn from(r: rug::Rational) -> Self {
-        Expr::Arith(ArithExpr::from(r))
+impl From<bool> for Expr {
+    fn from(b: bool) -> Self {
+        Expr::Bool(BoolExpr::from(b))
     }
 }
 
@@ -44,6 +44,12 @@ pub enum BoolExpr {
     Eq(Box<Expr>, Box<Expr>),
 }
 
+impl BoolExpr {
+    pub fn eq(self, other: BoolExpr) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Bool(self)), Box::new(Expr::Bool(other)))
+    }
+}
+
 impl From<bool> for BoolExpr {
     fn from(b: bool) -> Self {
         if b { BoolExpr::True } else { BoolExpr::False }
@@ -55,6 +61,50 @@ impl ops::Not for BoolExpr {
 
     fn not(self) -> Self {
         BoolExpr::Not(Box::new(self))
+    }
+}
+
+impl ops::BitAnd for BoolExpr {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (BoolExpr::And(mut left_vec), BoolExpr::And(mut right_vec)) => {
+                left_vec.append(&mut right_vec);
+                BoolExpr::And(left_vec)
+            }
+            (BoolExpr::And(mut left_vec), rhs_expr) => {
+                left_vec.push(rhs_expr);
+                BoolExpr::And(left_vec)
+            }
+            (lhs_expr, BoolExpr::And(mut right_vec)) => {
+                right_vec.insert(0, lhs_expr);
+                BoolExpr::And(right_vec)
+            }
+            (lhs_expr, rhs_expr) => BoolExpr::And(vec![lhs_expr, rhs_expr]),
+        }
+    }
+}
+
+impl ops::BitOr for BoolExpr {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (BoolExpr::Or(mut left_vec), BoolExpr::Or(mut right_vec)) => {
+                left_vec.append(&mut right_vec);
+                BoolExpr::Or(left_vec)
+            }
+            (BoolExpr::Or(mut left_vec), rhs_expr) => {
+                left_vec.push(rhs_expr);
+                BoolExpr::Or(left_vec)
+            }
+            (lhs_expr, BoolExpr::Or(mut right_vec)) => {
+                right_vec.insert(0, lhs_expr);
+                BoolExpr::Or(right_vec)
+            }
+            (lhs_expr, rhs_expr) => BoolExpr::Or(vec![lhs_expr, rhs_expr]),
+        }
     }
 }
 
@@ -88,6 +138,18 @@ pub enum EnumExpr {
     Const(i32),
 }
 
+impl From<i32> for EnumExpr {
+    fn from(n: i32) -> Self {
+        EnumExpr::Const(n)
+    }
+}
+
+impl EnumExpr {
+    pub fn eq(self, other: EnumExpr) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Enum(self)), Box::new(Expr::Enum(other)))
+    }
+}
+
 impl fmt::Display for EnumExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -108,15 +170,89 @@ pub enum ArithExpr {
     Neg(Box<ArithExpr>),
 }
 
+impl ArithExpr {
+    pub fn lt(self, other: ArithExpr) -> BoolExpr {
+        BoolExpr::Lt(self, other)
+    }
+
+    pub fn le(self, other: ArithExpr) -> BoolExpr {
+        BoolExpr::Le(self, other)
+    }
+
+    pub fn gt(self, other: ArithExpr) -> BoolExpr {
+        BoolExpr::Gt(self, other)
+    }
+
+    pub fn ge(self, other: ArithExpr) -> BoolExpr {
+        BoolExpr::Ge(self, other)
+    }
+
+    pub fn eq(self, other: ArithExpr) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Arith(self)), Box::new(Expr::Arith(other)))
+    }
+}
+
 impl From<i32> for ArithExpr {
     fn from(n: i32) -> Self {
         ArithExpr::Const(rug::Rational::from(n))
     }
 }
 
-impl From<rug::Rational> for ArithExpr {
-    fn from(r: rug::Rational) -> Self {
-        ArithExpr::Const(r)
+impl From<(i32, i32)> for ArithExpr {
+    fn from((num, denom): (i32, i32)) -> Self {
+        ArithExpr::Const(rug::Rational::from((num, denom)))
+    }
+}
+
+impl ops::Add for ArithExpr {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (ArithExpr::Add(mut left_vec), ArithExpr::Add(mut right_vec)) => {
+                left_vec.append(&mut right_vec);
+                ArithExpr::Add(left_vec)
+            }
+            (ArithExpr::Add(mut left_vec), rhs_expr) => {
+                left_vec.push(rhs_expr);
+                ArithExpr::Add(left_vec)
+            }
+            (lhs_expr, ArithExpr::Add(mut right_vec)) => {
+                right_vec.insert(0, lhs_expr);
+                ArithExpr::Add(right_vec)
+            }
+            (lhs_expr, rhs_expr) => ArithExpr::Add(vec![lhs_expr, rhs_expr]),
+        }
+    }
+}
+
+impl ops::Mul for ArithExpr {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        match (self, rhs) {
+            (ArithExpr::Mul(mut left_vec), ArithExpr::Mul(mut right_vec)) => {
+                left_vec.append(&mut right_vec);
+                ArithExpr::Mul(left_vec)
+            }
+            (ArithExpr::Mul(mut left_vec), rhs_expr) => {
+                left_vec.push(rhs_expr);
+                ArithExpr::Mul(left_vec)
+            }
+            (lhs_expr, ArithExpr::Mul(mut right_vec)) => {
+                right_vec.insert(0, lhs_expr);
+                ArithExpr::Mul(right_vec)
+            }
+            (lhs_expr, rhs_expr) => ArithExpr::Mul(vec![lhs_expr, rhs_expr]),
+        }
+    }
+}
+
+impl ops::Div for ArithExpr {
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        ArithExpr::Div(Box::new(self), Box::new(rhs))
     }
 }
 
@@ -256,76 +392,6 @@ pub fn to_cnf(expr: &BoolExpr) -> BoolExpr {
     distribute(&push_negations(expr))
 }
 
-/// Builds an integer arithmetic constant.
-pub fn cst_arith(val: i32) -> ArithExpr {
-    ArithExpr::Const(rug::Rational::from(val))
-}
-
-/// Builds a rational arithmetic constant from a numerator and denominator.
-pub fn cst_frac(num: i32, denom: i32) -> ArithExpr {
-    ArithExpr::Const(rug::Rational::from((num, denom)))
-}
-
-/// Builds an enum constant value.
-pub fn cst_enum(val: i32) -> EnumExpr {
-    EnumExpr::Const(val)
-}
-
-/// Creates a conjunction of boolean expressions.
-pub fn and(es: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
-    BoolExpr::And(es.into_iter().collect())
-}
-
-/// Creates a disjunction of boolean expressions.
-pub fn or(es: impl IntoIterator<Item = BoolExpr>) -> BoolExpr {
-    BoolExpr::Or(es.into_iter().collect())
-}
-
-/// Creates a sum of arithmetic expressions.
-pub fn add(es: impl IntoIterator<Item = ArithExpr>) -> ArithExpr {
-    ArithExpr::Add(es.into_iter().collect())
-}
-
-/// Creates a product of arithmetic expressions.
-pub fn mul(es: impl IntoIterator<Item = ArithExpr>) -> ArithExpr {
-    ArithExpr::Mul(es.into_iter().collect())
-}
-
-/// Builds the atom `e1 < e2`.
-pub fn lt(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
-    BoolExpr::Lt(e1, e2)
-}
-
-/// Builds the atom `e1 <= e2`.
-pub fn le(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
-    BoolExpr::Le(e1, e2)
-}
-
-/// Builds a generic equality between two expressions.
-pub fn eq(e1: Expr, e2: Expr) -> BoolExpr {
-    BoolExpr::Eq(Box::new(e1), Box::new(e2))
-}
-
-/// Builds an arithmetic equality `e1 = e2`.
-pub fn eq_arith(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
-    BoolExpr::Eq(Box::new(Expr::Arith(e1)), Box::new(Expr::Arith(e2)))
-}
-
-/// Builds an enum equality `e1 = e2`.
-pub fn eq_enum(e1: EnumExpr, e2: EnumExpr) -> BoolExpr {
-    BoolExpr::Eq(Box::new(Expr::Enum(e1)), Box::new(Expr::Enum(e2)))
-}
-
-/// Builds the atom `e1 >= e2`.
-pub fn ge(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
-    BoolExpr::Ge(e1, e2)
-}
-
-/// Builds the atom `e1 > e2`.
-pub fn gt(e1: ArithExpr, e2: ArithExpr) -> BoolExpr {
-    BoolExpr::Gt(e1, e2)
-}
-
 /// Constrains `z` to be the minimum of a non-empty set of arithmetic values.
 pub fn min(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr {
     let args = args.into_iter().collect::<Vec<_>>();
@@ -394,12 +460,12 @@ mod tests {
 
     #[test]
     fn bool_display_and() {
-        assert_eq!(and([BoolExpr::Var(0), BoolExpr::Var(1)]).to_string(), "(b0 ∧ b1)");
+        assert_eq!((BoolExpr::Var(0) & BoolExpr::Var(1)).to_string(), "(b0 ∧ b1)");
     }
 
     #[test]
     fn bool_display_or() {
-        assert_eq!(or([BoolExpr::Var(0), BoolExpr::Var(1)]).to_string(), "(b0 ∨ b1)");
+        assert_eq!((BoolExpr::Var(0) | BoolExpr::Var(1)).to_string(), "(b0 ∨ b1)");
     }
 
     #[test]
@@ -431,19 +497,19 @@ mod tests {
 
     #[test]
     fn arith_display_add() {
-        let e = add([ArithExpr::IntVar(0), ArithExpr::IntVar(1)]);
+        let e = ArithExpr::IntVar(0) + ArithExpr::IntVar(1);
         assert_eq!(e.to_string(), "(i0 + i1)");
     }
 
     #[test]
     fn arith_display_sub() {
-        let e = add([ArithExpr::IntVar(0), ArithExpr::Neg(Box::new(ArithExpr::IntVar(1)))]);
+        let e = ArithExpr::IntVar(0) + -ArithExpr::IntVar(1);
         assert_eq!(e.to_string(), "(i0 - i1)");
     }
 
     #[test]
     fn arith_display_mul() {
-        let e = mul([ArithExpr::IntVar(0), ArithExpr::IntVar(1)]);
+        let e = ArithExpr::IntVar(0) * ArithExpr::IntVar(1);
         assert_eq!(e.to_string(), "(i0 * i1)");
     }
 
@@ -485,28 +551,28 @@ mod tests {
 
     #[test]
     fn push_negations_recurses_into_and() {
-        let expr = and([!(!BoolExpr::Var(0)), !(!BoolExpr::Var(1))]);
-        assert_eq!(push_negations(&expr), and([BoolExpr::Var(0), BoolExpr::Var(1)]));
+        let expr = !(!BoolExpr::Var(0)) & !(!BoolExpr::Var(1));
+        assert_eq!(push_negations(&expr), BoolExpr::Var(0) & BoolExpr::Var(1));
     }
 
     #[test]
     fn push_negations_recurses_into_or() {
-        let expr = or([!(!BoolExpr::Var(0)), BoolExpr::Var(1)]);
-        assert_eq!(push_negations(&expr), or([BoolExpr::Var(0), BoolExpr::Var(1)]));
+        let expr = !(!BoolExpr::Var(0)) | BoolExpr::Var(1);
+        assert_eq!(push_negations(&expr), BoolExpr::Var(0) | BoolExpr::Var(1));
     }
 
     #[test]
     fn push_negations_not_and_demorgan() {
         // Not(And(a, b)) => Or(Not(a), Not(b))
-        let expr = !and([BoolExpr::Var(0), BoolExpr::Var(1)]);
-        assert_eq!(push_negations(&expr), or([!BoolExpr::Var(0), !BoolExpr::Var(1)]));
+        let expr = !(BoolExpr::Var(0) & BoolExpr::Var(1));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(0) | !BoolExpr::Var(1));
     }
 
     #[test]
     fn push_negations_not_or_demorgan() {
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !or([BoolExpr::Var(0), BoolExpr::Var(1)]);
-        assert_eq!(push_negations(&expr), and([!BoolExpr::Var(0), !BoolExpr::Var(1)]));
+        let expr = !(BoolExpr::Var(0) | BoolExpr::Var(1));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(0) & !BoolExpr::Var(1));
     }
 
     #[test]
@@ -550,49 +616,49 @@ mod tests {
 
     #[test]
     fn distribute_and_of_atoms() {
-        let expr = and([BoolExpr::Var(0), BoolExpr::Var(1)]);
-        assert_eq!(distribute(&expr), and([BoolExpr::Var(0), BoolExpr::Var(1)]));
+        let expr = BoolExpr::Var(0) & BoolExpr::Var(1);
+        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1));
     }
 
     #[test]
     fn distribute_or_of_atoms() {
-        let expr = or([BoolExpr::Var(0), BoolExpr::Var(1)]);
+        let expr = BoolExpr::Var(0) | BoolExpr::Var(1);
         // Or(a, b) with no And inside stays as-is (wrapped in And with one element, unwrapped)
-        assert_eq!(distribute(&expr), or([BoolExpr::Var(0), BoolExpr::Var(1)]));
+        assert_eq!(distribute(&expr), BoolExpr::Var(0) | BoolExpr::Var(1));
     }
 
     #[test]
     fn distribute_or_over_and() {
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = or([BoolExpr::Var(0), and([BoolExpr::Var(1), BoolExpr::Var(2)])]);
-        let expected = and([or([BoolExpr::Var(0), BoolExpr::Var(1)]), or([BoolExpr::Var(0), BoolExpr::Var(2)])]);
+        let expr = BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2));
+        let expected = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(0) | BoolExpr::Var(2));
         assert_eq!(distribute(&expr), expected);
     }
 
     #[test]
     fn distribute_flattens_nested_or() {
         // Or(Or(a, b), c) => Or(a, b, c)
-        let expr = or([or([BoolExpr::Var(0), BoolExpr::Var(1)]), BoolExpr::Var(2)]);
-        assert_eq!(distribute(&expr), or([BoolExpr::Var(0), BoolExpr::Var(1), BoolExpr::Var(2)]));
+        let expr = (BoolExpr::Var(0) | BoolExpr::Var(1)) | BoolExpr::Var(2);
+        assert_eq!(distribute(&expr), BoolExpr::Var(0) | BoolExpr::Var(1) | BoolExpr::Var(2));
     }
 
     #[test]
     fn distribute_flattens_nested_and() {
         // And(And(a, b), c) => And(a, b, c)
-        let expr = and([and([BoolExpr::Var(0), BoolExpr::Var(1)]), BoolExpr::Var(2)]);
-        assert_eq!(distribute(&expr), and([BoolExpr::Var(0), BoolExpr::Var(1), BoolExpr::Var(2)]));
+        let expr = BoolExpr::Var(0) & (BoolExpr::Var(1) & BoolExpr::Var(2));
+        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1) & BoolExpr::Var(2));
     }
 
     #[test]
     fn distribute_and_inside_and_flattened() {
-        let expr = and([BoolExpr::Var(0), and([BoolExpr::Var(1), BoolExpr::Var(2)])]);
-        assert_eq!(distribute(&expr), and([BoolExpr::Var(0), BoolExpr::Var(1), BoolExpr::Var(2)]));
+        let expr = BoolExpr::Var(0) & (BoolExpr::Var(1) & BoolExpr::Var(2));
+        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1) & BoolExpr::Var(2));
     }
 
     #[test]
     fn distribute_cartesian_product_two_ands() {
         // Or(And(a, b), And(c, d)) => And(Or(a,c), Or(a,d), Or(b,c), Or(b,d))
-        let expr = or([and([BoolExpr::Var(0), BoolExpr::Var(1)]), and([BoolExpr::Var(2), BoolExpr::Var(3)])]);
+        let expr = (BoolExpr::Var(0) & BoolExpr::Var(1)) | (BoolExpr::Var(2) & BoolExpr::Var(3));
         let result = distribute(&expr);
         // Should be an And of four Or clauses
         if let BoolExpr::And(clauses) = result {
@@ -615,7 +681,7 @@ mod tests {
     #[test]
     fn to_cnf_already_cnf() {
         // And(Or(a, b), Or(c, d)) is already CNF
-        let expr = and([or([BoolExpr::Var(0), BoolExpr::Var(1)]), or([BoolExpr::Var(2), BoolExpr::Var(3)])]);
+        let expr = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(2) | BoolExpr::Var(3));
         assert_eq!(to_cnf(&expr), expr);
     }
 
@@ -627,22 +693,22 @@ mod tests {
     #[test]
     fn to_cnf_not_and_demorgan_then_distribute() {
         // Not(And(a, b)) => Or(Not(a), Not(b)) — already a single clause
-        let expr = !and([BoolExpr::Var(0), BoolExpr::Var(1)]);
-        assert_eq!(to_cnf(&expr), or([!BoolExpr::Var(0), !BoolExpr::Var(1)]));
+        let expr = !(BoolExpr::Var(0) & BoolExpr::Var(1));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(0) | !BoolExpr::Var(1));
     }
 
     #[test]
     fn to_cnf_not_or_demorgan() {
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !or([BoolExpr::Var(0), BoolExpr::Var(1)]);
-        assert_eq!(to_cnf(&expr), and([!BoolExpr::Var(0), !BoolExpr::Var(1)]));
+        let expr = !(BoolExpr::Var(0) | BoolExpr::Var(1));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(0) & !BoolExpr::Var(1));
     }
 
     #[test]
     fn to_cnf_or_over_and_distributes() {
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = or([BoolExpr::Var(0), and([BoolExpr::Var(1), BoolExpr::Var(2)])]);
-        let expected = and([or([BoolExpr::Var(0), BoolExpr::Var(1)]), or([BoolExpr::Var(0), BoolExpr::Var(2)])]);
+        let expr = BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2));
+        let expected = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(0) | BoolExpr::Var(2));
         assert_eq!(to_cnf(&expr), expected);
     }
 
@@ -655,7 +721,7 @@ mod tests {
     #[test]
     fn to_cnf_nested_not_and_or() {
         // Not(Or(And(a,b), c)) => And(Or(Not(a), Not(c)), Or(Not(b), Not(c)))
-        let expr = !(or([and([BoolExpr::Var(0), BoolExpr::Var(1)]), BoolExpr::Var(2)]));
+        let expr = !(BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2)));
         // push_negations: And(Or(Not(a), Not(b)), Not(c))
         // distribute: And of Or(Not(a),Not(b)) and Not(c) — already flat
         let result = to_cnf(&expr);

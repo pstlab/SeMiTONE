@@ -779,7 +779,6 @@ impl SeMiTONE {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{add, and, cst_arith, cst_enum, eq_arith, eq_enum, ge, gt, le, lt, or};
 
     #[test]
     fn test_pure_sat_resolution() {
@@ -791,7 +790,7 @@ mod tests {
 
         // (A ∨ B) ∧ (¬B ∨ C) ∧ (¬B ∨ ¬C) ∧ (¬A)
         // With ¬A, clause (A ∨ B) forces B; then B forces both C and ¬C.
-        let expr = and([or([a.clone(), b.clone()]), or([!b.clone(), c.clone()]), or([!b, !c]), !a]);
+        let expr = (a.clone() | b.clone()) & (!b.clone() | c.clone()) & (!b | !c) & !a;
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
@@ -803,7 +802,7 @@ mod tests {
         let x = solver.new_real();
 
         // x > 10 ∧ x < 5
-        let expr = and([gt(x.clone(), cst_arith(10)), lt(x, cst_arith(5))]);
+        let expr = (x.clone().gt(ArithExpr::from(10))) & (x.lt(ArithExpr::from(5)));
 
         let result = solver.assert(&expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
@@ -815,7 +814,7 @@ mod tests {
         let x = solver.new_real();
 
         // x == 5 ∧ x > 6
-        let expr = and([eq_arith(x.clone(), cst_arith(5)), gt(x, cst_arith(6))]);
+        let expr = (x.clone().eq(ArithExpr::from(5))) & (x.gt(ArithExpr::from(6)));
 
         let result = solver.assert(&expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
@@ -828,13 +827,13 @@ mod tests {
         let y = solver.new_real();
 
         // x + y == 10
-        let eq_expr = eq_arith(add([x.clone(), y.clone()]), cst_arith(10));
+        let eq_expr = (x.clone() + y.clone()).eq(ArithExpr::from(10));
         // x > 6
-        let gt_x = gt(x.clone(), cst_arith(6));
+        let gt_x = x.clone().gt(ArithExpr::from(6));
         // y > 6
-        let gt_y = gt(y.clone(), cst_arith(6));
+        let gt_y = y.clone().gt(ArithExpr::from(6));
 
-        let expr = and([eq_expr, gt_x, gt_y]);
+        let expr = eq_expr & gt_x & gt_y;
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
@@ -844,18 +843,18 @@ mod tests {
     fn test_constant_arithmetic_evaluations() {
         let mut solver = SeMiTONE::new();
 
-        assert!(solver.assert(&lt(cst_arith(5), cst_arith(10))));
-        assert!(solver.assert(&le(cst_arith(5), cst_arith(5))));
-        assert!(solver.assert(&ge(cst_arith(10), cst_arith(5))));
-        assert!(solver.assert(&gt(cst_arith(10), cst_arith(5))));
+        assert!(solver.assert(&ArithExpr::from(5).lt(ArithExpr::from(10))));
+        assert!(solver.assert(&ArithExpr::from(5).le(ArithExpr::from(5))));
+        assert!(solver.assert(&ArithExpr::from(10).ge(ArithExpr::from(5))));
+        assert!(solver.assert(&ArithExpr::from(10).gt(ArithExpr::from(5))));
 
-        assert!(!solver.assert(&lt(cst_arith(10), cst_arith(5))));
-        assert!(!solver.assert(&le(cst_arith(10), cst_arith(5))));
-        assert!(!solver.assert(&ge(cst_arith(5), cst_arith(10))));
-        assert!(!solver.assert(&gt(cst_arith(5), cst_arith(10))));
+        assert!(!solver.assert(&ArithExpr::from(10).lt(ArithExpr::from(5))));
+        assert!(!solver.assert(&ArithExpr::from(10).le(ArithExpr::from(5))));
+        assert!(!solver.assert(&ArithExpr::from(5).ge(ArithExpr::from(10))));
+        assert!(!solver.assert(&ArithExpr::from(5).gt(ArithExpr::from(10))));
 
-        assert!(solver.assert(&!lt(cst_arith(10), cst_arith(5))));
-        assert!(!solver.assert(&!lt(cst_arith(5), cst_arith(10))));
+        assert!(solver.assert(&!ArithExpr::from(10).lt(ArithExpr::from(5))));
+        assert!(!solver.assert(&!ArithExpr::from(5).lt(ArithExpr::from(10))));
     }
 
     #[test]
@@ -864,23 +863,23 @@ mod tests {
         let x = solver.new_real();
 
         solver.push();
-        assert!(solver.assert(&!lt(x.clone(), cst_arith(5))));
-        assert!(!solver.assert(&lt(x.clone(), cst_arith(4))));
+        assert!(solver.assert(&!x.clone().lt(ArithExpr::from(5))));
+        assert!(!solver.assert(&x.clone().lt(ArithExpr::from(4))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!le(x.clone(), cst_arith(5))));
-        assert!(!solver.assert(&le(x.clone(), cst_arith(5))));
+        assert!(solver.assert(&!x.clone().le(ArithExpr::from(5))));
+        assert!(!solver.assert(&x.clone().le(ArithExpr::from(5))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!ge(x.clone(), cst_arith(5))));
-        assert!(!solver.assert(&ge(x.clone(), cst_arith(5))));
+        assert!(solver.assert(&!x.clone().ge(ArithExpr::from(5))));
+        assert!(!solver.assert(&x.clone().ge(ArithExpr::from(5))));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!gt(x.clone(), cst_arith(5))));
-        assert!(!solver.assert(&gt(x.clone(), cst_arith(5))));
+        assert!(solver.assert(&!x.clone().gt(ArithExpr::from(5))));
+        assert!(!solver.assert(&x.clone().gt(ArithExpr::from(5))));
         solver.pop();
     }
 
@@ -901,7 +900,7 @@ mod tests {
         let mut solver = SeMiTONE::new();
         let e = solver.new_enum(vec![1, 2]);
 
-        let expr = eq_enum(e, cst_enum(3));
+        let expr = e.eq(EnumExpr::from(3));
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
@@ -913,7 +912,7 @@ mod tests {
         let e = solver.new_enum(vec![1, 2]);
 
         // (e != 1) AND (e != 2)
-        let expr = and(vec![!(eq_enum(e.clone(), cst_enum(1))), !(eq_enum(e, cst_enum(2)))]);
+        let expr = !(e.clone().eq(EnumExpr::from(1))) & !(e.clone().eq(EnumExpr::from(2)));
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
