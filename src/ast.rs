@@ -226,6 +226,14 @@ impl ops::Add for ArithExpr {
     }
 }
 
+impl ops::Sub for ArithExpr {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self + -rhs
+    }
+}
+
 impl ops::Mul for ArithExpr {
     type Output = Self;
 
@@ -503,7 +511,7 @@ mod tests {
 
     #[test]
     fn arith_display_sub() {
-        let e = ArithExpr::IntVar(0) + -ArithExpr::IntVar(1);
+        let e = ArithExpr::IntVar(0) - ArithExpr::IntVar(1);
         assert_eq!(e.to_string(), "(i0 - i1)");
     }
 

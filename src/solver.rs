@@ -233,7 +233,7 @@ impl BranchingHeuristics {
 mod tests {
     use super::*;
     use crate::{
-        ast::{Expr, add, and, cst_arith, cst_enum, cst_frac, eq_arith, eq_enum, ge, gt, le, lt, min, mul, or},
+        ast::{Expr, min},
         rational::{InfRational, Rational},
     };
 
