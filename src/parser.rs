@@ -212,7 +212,13 @@ impl<'a> SmtParser<'a> {
                         // We attempt to parse the first argument as Arith. If it fails (panics),
                         // it should theoretically be handled as Bool.
                         // For a robust implementation, checking the symbol map is safer.
-                        if self.is_bool_term(&arguments[0]) { self.translate_bool_term(&arguments[0]).eq(self.translate_bool_term(&arguments[1])) } else { self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1])) }
+                        if self.is_bool_term(&arguments[0]) {
+                            let left = self.translate_bool_term(&arguments[0]);
+                            let right = self.translate_bool_term(&arguments[1]);
+                            left.eq(&right)
+                        } else {
+                            self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1]))
+                        }
                     }
                     _ => panic!("Unsupported boolean operator: {}", op),
                 }

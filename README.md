@@ -41,10 +41,7 @@ SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. A 
 Below is a compact conceptual example:
 
 ```rust
-use semitone::{
-  ast::ArithExpr,
-  SeMiTONE,
-};
+use semitone::SeMiTONE;
 
 let mut solver = SeMiTONE::new();
 

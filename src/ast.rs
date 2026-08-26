@@ -67,8 +67,8 @@ pub enum BoolExpr {
 
 impl BoolExpr {
     /// Builds an equality constraint between two Boolean formulas.
-    pub fn eq(self, other: BoolExpr) -> BoolExpr {
-        BoolExpr::Eq(Box::new(Expr::Bool(self)), Box::new(Expr::Bool(other)))
+    pub fn eq(&self, other: &BoolExpr) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Bool(self.clone())), Box::new(Expr::Bool(other.clone())))
     }
 }
 
@@ -193,10 +193,16 @@ impl From<i32> for EnumExpr {
     }
 }
 
+impl From<&EnumExpr> for EnumExpr {
+    fn from(expr: &EnumExpr) -> Self {
+        expr.clone()
+    }
+}
+
 impl EnumExpr {
     /// Builds an equality constraint between two enum expressions.
-    pub fn eq(self, other: impl Into<EnumExpr>) -> BoolExpr {
-        BoolExpr::Eq(Box::new(Expr::Enum(self)), Box::new(Expr::Enum(other.into())))
+    pub fn eq(&self, other: impl Into<EnumExpr>) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Enum(self.clone())), Box::new(Expr::Enum(other.into())))
     }
 }
 
@@ -234,28 +240,28 @@ pub enum ArithExpr {
 
 impl ArithExpr {
     /// Builds the constraint `self < other`.
-    pub fn lt(self, other: impl Into<ArithExpr>) -> BoolExpr {
-        BoolExpr::Lt(self, other.into())
+    pub fn lt(&self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Lt(self.clone(), other.into())
     }
 
     /// Builds the constraint `self <= other`.
-    pub fn le(self, other: impl Into<ArithExpr>) -> BoolExpr {
-        BoolExpr::Le(self, other.into())
+    pub fn le(&self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Le(self.clone(), other.into())
     }
 
     /// Builds the constraint `self > other`.
-    pub fn gt(self, other: impl Into<ArithExpr>) -> BoolExpr {
-        BoolExpr::Gt(self, other.into())
+    pub fn gt(&self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Gt(self.clone(), other.into())
     }
 
     /// Builds the constraint `self >= other`.
-    pub fn ge(self, other: impl Into<ArithExpr>) -> BoolExpr {
-        BoolExpr::Ge(self, other.into())
+    pub fn ge(&self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Ge(self.clone(), other.into())
     }
 
     /// Builds the constraint `self = other`.
-    pub fn eq(self, other: impl Into<ArithExpr>) -> BoolExpr {
-        BoolExpr::Eq(Box::new(Expr::Arith(self)), Box::new(Expr::Arith(other.into())))
+    pub fn eq(&self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Arith(self.clone())), Box::new(Expr::Arith(other.into())))
     }
 }
 
@@ -268,6 +274,12 @@ impl From<i32> for ArithExpr {
 impl From<(i32, i32)> for ArithExpr {
     fn from((num, denom): (i32, i32)) -> Self {
         ArithExpr::Const(rug::Rational::from((num, denom)))
+    }
+}
+
+impl From<&ArithExpr> for ArithExpr {
+    fn from(expr: &ArithExpr) -> Self {
+        expr.clone()
     }
 }
 
