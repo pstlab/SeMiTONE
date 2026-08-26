@@ -1,10 +1,17 @@
 use rug::Complete;
 use std::{fmt, ops};
 
+/// An extended rational number with positive and negative infinity.
+///
+/// Operations that are mathematically undefined, such as $0 / 0$ or
+/// $+\infty + -\infty$, panic.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Rational {
+    /// Negative infinity.
     NegativeInf,
+    /// A finite exact rational value.
     Finite(rug::Rational),
+    /// Positive infinity.
     PositiveInf,
 }
 
@@ -342,6 +349,10 @@ impl fmt::Display for Rational {
     }
 }
 
+/// A rational value with an infinitesimal component.
+///
+/// This represents $rat + inf \epsilon$ and is used internally to encode
+/// strict arithmetic bounds.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InfRational {
     rat: Rational,

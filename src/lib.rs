@@ -1,3 +1,12 @@
+#![doc = include_str!("../README.md")]
+
+//! # API overview
+//!
+//! [`SeMiTONE`] owns all solver state. Create expressions with the types in
+//! [`ast`], assert a [`ast::BoolExpr`], then call [`SeMiTONE::propagate`] after
+//! each assertion or decision. Applications that need a complete SAT/SMT search
+//! loop can use the decision, trail, and clause APIs exposed by [`SeMiTONE`].
+
 pub mod ast;
 mod enum_theory;
 mod lra_theory;

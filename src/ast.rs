@@ -1,13 +1,18 @@
 use std::{fmt, ops};
 
+/// A typed expression that can be embedded in a generic equality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
+    /// A Boolean expression.
     Bool(BoolExpr),
+    /// A finite-domain enum expression.
     Enum(EnumExpr),
+    /// An integer or real arithmetic expression.
     Arith(ArithExpr),
 }
 
 impl Expr {
+    /// Builds a typed equality constraint between two expressions.
     pub fn eq(self, other: Expr) -> BoolExpr {
         BoolExpr::Eq(Box::new(self), Box::new(other))
     }
@@ -29,22 +34,39 @@ impl fmt::Display for Expr {
     }
 }
 
+/// A Boolean formula accepted by [`crate::SeMiTONE::assert`].
+///
+/// Use `!`, `&`, and `|` to construct negations, conjunctions, and
+/// disjunctions. The `&` and `|` operators flatten nested expressions of the
+/// same kind while preserving operand order.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BoolExpr {
+    /// The Boolean constant `true`.
     True,
+    /// The Boolean constant `false`.
     False,
+    /// A Boolean variable allocated by [`crate::SeMiTONE::new_bool`].
     Var(usize),
+    /// Logical negation.
     Not(Box<BoolExpr>),
+    /// Logical conjunction.
     And(Vec<BoolExpr>),
+    /// Logical disjunction.
     Or(Vec<BoolExpr>),
+    /// Strict arithmetic comparison.
     Lt(ArithExpr, ArithExpr),
+    /// Non-strict arithmetic comparison.
     Le(ArithExpr, ArithExpr),
+    /// Non-strict arithmetic comparison.
     Ge(ArithExpr, ArithExpr),
+    /// Strict arithmetic comparison.
     Gt(ArithExpr, ArithExpr),
+    /// Equality between expressions of the same theory.
     Eq(Box<Expr>, Box<Expr>),
 }
 
 impl BoolExpr {
+    /// Builds an equality constraint between two Boolean formulas.
     pub fn eq(self, other: BoolExpr) -> BoolExpr {
         BoolExpr::Eq(Box::new(Expr::Bool(self)), Box::new(Expr::Bool(other)))
     }
@@ -132,9 +154,12 @@ impl fmt::Display for BoolExpr {
     }
 }
 
+/// A finite-domain enum variable or integer constant.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EnumExpr {
+    /// An enum variable allocated by [`crate::SeMiTONE::new_enum`].
     Var(usize),
+    /// An enum constant.
     Const(i32),
 }
 
@@ -145,6 +170,7 @@ impl From<i32> for EnumExpr {
 }
 
 impl EnumExpr {
+    /// Builds an equality constraint between two enum expressions.
     pub fn eq(self, other: EnumExpr) -> BoolExpr {
         BoolExpr::Eq(Box::new(Expr::Enum(self)), Box::new(Expr::Enum(other)))
     }
@@ -159,34 +185,51 @@ impl fmt::Display for EnumExpr {
     }
 }
 
+/// An arithmetic expression over integer and real solver variables.
+///
+/// Use `+`, `-`, `*`, `/`, and unary `-` to compose expressions. Arithmetic
+/// comparisons are constructed with [`ArithExpr::lt`], [`ArithExpr::le`],
+/// [`ArithExpr::ge`], [`ArithExpr::gt`], and [`ArithExpr::eq`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArithExpr {
+    /// A rational constant.
     Const(rug::Rational),
+    /// An integer variable allocated by [`crate::SeMiTONE::new_int`].
     IntVar(usize),
+    /// A real variable allocated by [`crate::SeMiTONE::new_real`].
     RealVar(usize),
+    /// A sum of arithmetic terms.
     Add(Vec<ArithExpr>),
+    /// A product of arithmetic terms.
     Mul(Vec<ArithExpr>),
+    /// Division of two arithmetic expressions.
     Div(Box<ArithExpr>, Box<ArithExpr>),
+    /// Arithmetic negation.
     Neg(Box<ArithExpr>),
 }
 
 impl ArithExpr {
+    /// Builds the constraint `self < other`.
     pub fn lt(self, other: ArithExpr) -> BoolExpr {
         BoolExpr::Lt(self, other)
     }
 
+    /// Builds the constraint `self <= other`.
     pub fn le(self, other: ArithExpr) -> BoolExpr {
         BoolExpr::Le(self, other)
     }
 
+    /// Builds the constraint `self > other`.
     pub fn gt(self, other: ArithExpr) -> BoolExpr {
         BoolExpr::Gt(self, other)
     }
 
+    /// Builds the constraint `self >= other`.
     pub fn ge(self, other: ArithExpr) -> BoolExpr {
         BoolExpr::Ge(self, other)
     }
 
+    /// Builds the constraint `self = other`.
     pub fn eq(self, other: ArithExpr) -> BoolExpr {
         BoolExpr::Eq(Box::new(Expr::Arith(self)), Box::new(Expr::Arith(other)))
     }

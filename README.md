@@ -3,7 +3,7 @@
 [![Crate](https://img.shields.io/crates/v/semitone?logo=rust)](https://crates.io/crates/semitone)
 [![Docs](https://docs.rs/semitone/badge.svg)](https://docs.rs/semitone)
 [![Rust](https://img.shields.io/badge/Rust-1.95+-orange?logo=rust)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green)](https://github.com/pstlab/SeMiTONE/blob/HEAD/LICENSE)
 ![Build Status](https://github.com/pstlab/SeMiTONE/actions/workflows/rust.yml/badge.svg)
 [![codecov](https://codecov.io/gh/pstlab/SeMiTONE/branch/main/graph/badge.svg)](https://codecov.io/gh/pstlab/SeMiTONE)
 
@@ -41,7 +41,10 @@ SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. A 
 Below is a compact conceptual example:
 
 ```rust
-use semitone::{SeMiTONE, ast::*};
+use semitone::{
+  ast::ArithExpr,
+  SeMiTONE,
+};
 
 let mut solver = SeMiTONE::new();
 
@@ -51,12 +54,12 @@ let y = solver.new_real();
 let state = solver.new_enum(vec![1, 2, 3]);
 
 // Build constraints: (x + y = 10) AND (x > 6)
-let eq_expr = eq_arith(add([x.clone(), y.clone()]), cst_arith(10));
-let gt_expr = gt(x, cst_arith(6));
+let eq_expr = (x.clone() + y.clone()).eq(ArithExpr::from(10));
+let gt_expr = x.gt(ArithExpr::from(6));
 
 // 1) Assert constraints into the network.
 //    `assert` returns false only for immediate/trivial inconsistencies.
-let system = and([eq_expr, gt_expr]);
+let system = eq_expr & gt_expr;
 if !solver.assert(&system) {
   println!("Trivial inconsistency detected during assert.");
 } else {
@@ -89,4 +92,4 @@ if !solver.assert(&system) {
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/pstlab/SeMiTONE/blob/HEAD/LICENSE) file for details.
