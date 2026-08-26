@@ -86,6 +86,14 @@ impl ops::Not for BoolExpr {
     }
 }
 
+impl ops::Not for &BoolExpr {
+    type Output = BoolExpr;
+
+    fn not(self) -> Self::Output {
+        !(*self).clone()
+    }
+}
+
 impl ops::BitAnd for BoolExpr {
     type Output = Self;
 
@@ -108,6 +116,14 @@ impl ops::BitAnd for BoolExpr {
     }
 }
 
+impl ops::BitAnd<&BoolExpr> for &BoolExpr {
+    type Output = BoolExpr;
+
+    fn bitand(self, rhs: &BoolExpr) -> Self::Output {
+        self.clone() & rhs.clone()
+    }
+}
+
 impl ops::BitOr for BoolExpr {
     type Output = Self;
 
@@ -127,6 +143,14 @@ impl ops::BitOr for BoolExpr {
             }
             (lhs_expr, rhs_expr) => BoolExpr::Or(vec![lhs_expr, rhs_expr]),
         }
+    }
+}
+
+impl ops::BitOr<&BoolExpr> for &BoolExpr {
+    type Output = BoolExpr;
+
+    fn bitor(self, rhs: &BoolExpr) -> Self::Output {
+        self.clone() | rhs.clone()
     }
 }
 
@@ -171,8 +195,8 @@ impl From<i32> for EnumExpr {
 
 impl EnumExpr {
     /// Builds an equality constraint between two enum expressions.
-    pub fn eq(self, other: EnumExpr) -> BoolExpr {
-        BoolExpr::Eq(Box::new(Expr::Enum(self)), Box::new(Expr::Enum(other)))
+    pub fn eq(self, other: impl Into<EnumExpr>) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Enum(self)), Box::new(Expr::Enum(other.into())))
     }
 }
 
@@ -210,28 +234,28 @@ pub enum ArithExpr {
 
 impl ArithExpr {
     /// Builds the constraint `self < other`.
-    pub fn lt(self, other: ArithExpr) -> BoolExpr {
-        BoolExpr::Lt(self, other)
+    pub fn lt(self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Lt(self, other.into())
     }
 
     /// Builds the constraint `self <= other`.
-    pub fn le(self, other: ArithExpr) -> BoolExpr {
-        BoolExpr::Le(self, other)
+    pub fn le(self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Le(self, other.into())
     }
 
     /// Builds the constraint `self > other`.
-    pub fn gt(self, other: ArithExpr) -> BoolExpr {
-        BoolExpr::Gt(self, other)
+    pub fn gt(self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Gt(self, other.into())
     }
 
     /// Builds the constraint `self >= other`.
-    pub fn ge(self, other: ArithExpr) -> BoolExpr {
-        BoolExpr::Ge(self, other)
+    pub fn ge(self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Ge(self, other.into())
     }
 
     /// Builds the constraint `self = other`.
-    pub fn eq(self, other: ArithExpr) -> BoolExpr {
-        BoolExpr::Eq(Box::new(Expr::Arith(self)), Box::new(Expr::Arith(other)))
+    pub fn eq(self, other: impl Into<ArithExpr>) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Arith(self)), Box::new(Expr::Arith(other.into())))
     }
 }
 
@@ -269,11 +293,27 @@ impl ops::Add for ArithExpr {
     }
 }
 
+impl ops::Add<&ArithExpr> for &ArithExpr {
+    type Output = ArithExpr;
+
+    fn add(self, rhs: &ArithExpr) -> Self::Output {
+        self.clone() + rhs.clone()
+    }
+}
+
 impl ops::Sub for ArithExpr {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
         self + -rhs
+    }
+}
+
+impl ops::Sub<&ArithExpr> for &ArithExpr {
+    type Output = ArithExpr;
+
+    fn sub(self, rhs: &ArithExpr) -> Self::Output {
+        self.clone() - rhs.clone()
     }
 }
 
@@ -299,6 +339,14 @@ impl ops::Mul for ArithExpr {
     }
 }
 
+impl ops::Mul<&ArithExpr> for &ArithExpr {
+    type Output = ArithExpr;
+
+    fn mul(self, rhs: &ArithExpr) -> Self::Output {
+        self.clone() * rhs.clone()
+    }
+}
+
 impl ops::Div for ArithExpr {
     type Output = Self;
 
@@ -307,11 +355,27 @@ impl ops::Div for ArithExpr {
     }
 }
 
+impl ops::Div<&ArithExpr> for &ArithExpr {
+    type Output = ArithExpr;
+
+    fn div(self, rhs: &ArithExpr) -> Self::Output {
+        self.clone() / rhs.clone()
+    }
+}
+
 impl ops::Neg for ArithExpr {
     type Output = Self;
 
     fn neg(self) -> Self {
         ArithExpr::Neg(Box::new(self))
+    }
+}
+
+impl ops::Neg for &ArithExpr {
+    type Output = ArithExpr;
+
+    fn neg(self) -> Self::Output {
+        -(*self).clone()
     }
 }
 

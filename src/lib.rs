@@ -157,7 +157,7 @@ impl SeMiTONE {
                     _ => unreachable!(),
                 };
 
-                let bound = InfRational::new(Rational::Finite(-const_term.clone()), eps_val);
+                let bound = InfRational::new(Rational::Finite(-const_term), eps_val);
 
                 if vars.len() == 1 {
                     let (var, coeff) = vars.iter().next().unwrap();
@@ -178,7 +178,7 @@ impl SeMiTONE {
                     }
 
                     if polarity {
-                        let bound = InfRational::new(Rational::Finite(-const_term.clone()), rug::Rational::from(0));
+                        let bound = InfRational::new(Rational::Finite(-const_term), rug::Rational::from(0));
 
                         if vars.len() == 1 {
                             let (var, coeff) = vars.iter().next().unwrap();
@@ -357,7 +357,7 @@ impl SeMiTONE {
             }
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
-                let bound = InfRational::new(Rational::Finite(-const_term.clone() / coeff), if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) } / coeff);
+                let bound = InfRational::new(Rational::Finite(-const_term / coeff), if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) } / coeff);
                 let bound = if coeff.is_positive() { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
@@ -403,7 +403,7 @@ impl SeMiTONE {
             }
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
-                let bound = InfRational::new(Rational::Finite(-const_term.clone() / coeff), if strict { rug::Rational::from(1) } else { rug::Rational::from(0) } / coeff);
+                let bound = InfRational::new(Rational::Finite(-const_term / coeff), if strict { rug::Rational::from(1) } else { rug::Rational::from(0) } / coeff);
                 let bound = if coeff.is_positive() { TheoryConstraint::LraLb(*var, bound) } else { TheoryConstraint::LraUb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
@@ -769,7 +769,7 @@ impl SeMiTONE {
 
             let mut floor_val = inner_frac.clone();
             floor_val.floor_mut();
-            let mut ceil_val = inner_frac.clone();
+            let mut ceil_val = inner_frac;
             ceil_val.ceil_mut();
 
             let ub = InfRational::new(Rational::Finite(floor_val), rug::Rational::from(0));
@@ -799,7 +799,7 @@ mod tests {
 
         // (A ∨ B) ∧ (¬B ∨ C) ∧ (¬B ∨ ¬C) ∧ (¬A)
         // With ¬A, clause (A ∨ B) forces B; then B forces both C and ¬C.
-        let expr = (a.clone() | b.clone()) & (!b.clone() | c.clone()) & (!b | !c) & !a;
+        let expr = (&a | &b) & (&!&b | &c) & (!&b | !&c) & !&a;
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
@@ -811,7 +811,7 @@ mod tests {
         let x = solver.new_real();
 
         // x > 10 ∧ x < 5
-        let expr = (x.clone().gt(ArithExpr::from(10))) & (x.lt(ArithExpr::from(5)));
+        let expr = (x.clone().gt(10)) & (x.lt(5));
 
         let result = solver.assert(&expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
@@ -823,7 +823,7 @@ mod tests {
         let x = solver.new_real();
 
         // x == 5 ∧ x > 6
-        let expr = (x.clone().eq(ArithExpr::from(5))) & (x.gt(ArithExpr::from(6)));
+        let expr = (x.clone().eq(5)) & (x.gt(6));
 
         let result = solver.assert(&expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
@@ -836,11 +836,11 @@ mod tests {
         let y = solver.new_real();
 
         // x + y == 10
-        let eq_expr = (x.clone() + y.clone()).eq(ArithExpr::from(10));
+        let eq_expr = (x.clone() + y.clone()).eq(10);
         // x > 6
-        let gt_x = x.clone().gt(ArithExpr::from(6));
+        let gt_x = x.clone().gt(6);
         // y > 6
-        let gt_y = y.clone().gt(ArithExpr::from(6));
+        let gt_y = y.clone().gt(6);
 
         let expr = eq_expr & gt_x & gt_y;
 
@@ -852,18 +852,18 @@ mod tests {
     fn test_constant_arithmetic_evaluations() {
         let mut solver = SeMiTONE::new();
 
-        assert!(solver.assert(&ArithExpr::from(5).lt(ArithExpr::from(10))));
-        assert!(solver.assert(&ArithExpr::from(5).le(ArithExpr::from(5))));
-        assert!(solver.assert(&ArithExpr::from(10).ge(ArithExpr::from(5))));
-        assert!(solver.assert(&ArithExpr::from(10).gt(ArithExpr::from(5))));
+        assert!(solver.assert(&ArithExpr::from(5).lt(10)));
+        assert!(solver.assert(&ArithExpr::from(5).le(5)));
+        assert!(solver.assert(&ArithExpr::from(10).ge(5)));
+        assert!(solver.assert(&ArithExpr::from(10).gt(5)));
 
-        assert!(!solver.assert(&ArithExpr::from(10).lt(ArithExpr::from(5))));
-        assert!(!solver.assert(&ArithExpr::from(10).le(ArithExpr::from(5))));
-        assert!(!solver.assert(&ArithExpr::from(5).ge(ArithExpr::from(10))));
-        assert!(!solver.assert(&ArithExpr::from(5).gt(ArithExpr::from(10))));
+        assert!(!solver.assert(&ArithExpr::from(10).lt(5)));
+        assert!(!solver.assert(&ArithExpr::from(10).le(5)));
+        assert!(!solver.assert(&ArithExpr::from(5).ge(10)));
+        assert!(!solver.assert(&ArithExpr::from(5).gt(10)));
 
-        assert!(solver.assert(&!ArithExpr::from(10).lt(ArithExpr::from(5))));
-        assert!(!solver.assert(&!ArithExpr::from(5).lt(ArithExpr::from(10))));
+        assert!(solver.assert(&!ArithExpr::from(10).lt(5)));
+        assert!(!solver.assert(&!ArithExpr::from(5).lt(10)));
     }
 
     #[test]
@@ -872,23 +872,23 @@ mod tests {
         let x = solver.new_real();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().lt(ArithExpr::from(5))));
-        assert!(!solver.assert(&x.clone().lt(ArithExpr::from(4))));
+        assert!(solver.assert(&!x.clone().lt(5)));
+        assert!(!solver.assert(&x.clone().lt(4)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().le(ArithExpr::from(5))));
-        assert!(!solver.assert(&x.clone().le(ArithExpr::from(5))));
+        assert!(solver.assert(&!x.clone().le(5)));
+        assert!(!solver.assert(&x.clone().le(5)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().ge(ArithExpr::from(5))));
-        assert!(!solver.assert(&x.clone().ge(ArithExpr::from(5))));
+        assert!(solver.assert(&!x.clone().ge(5)));
+        assert!(!solver.assert(&x.clone().ge(5)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().gt(ArithExpr::from(5))));
-        assert!(!solver.assert(&x.clone().gt(ArithExpr::from(5))));
+        assert!(solver.assert(&!x.clone().gt(5)));
+        assert!(!solver.assert(&x.clone().gt(5)));
         solver.pop();
     }
 
@@ -909,7 +909,7 @@ mod tests {
         let mut solver = SeMiTONE::new();
         let e = solver.new_enum(vec![1, 2]);
 
-        let expr = e.eq(EnumExpr::from(3));
+        let expr = e.eq(3);
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
@@ -921,7 +921,7 @@ mod tests {
         let e = solver.new_enum(vec![1, 2]);
 
         // (e != 1) AND (e != 2)
-        let expr = !(e.clone().eq(EnumExpr::from(1))) & !(e.clone().eq(EnumExpr::from(2)));
+        let expr = !(e.clone().eq(1)) & !(e.clone().eq(2));
 
         let _ = solver.assert(&expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");

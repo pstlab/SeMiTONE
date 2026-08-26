@@ -51,11 +51,11 @@ let mut solver = SeMiTONE::new();
 // Declare variables across different theories
 let x = solver.new_real();
 let y = solver.new_real();
-let state = solver.new_enum(vec![1, 2, 3]);
+let state = solver.new_enum([1, 2, 3]);
 
 // Build constraints: (x + y = 10) AND (x > 6)
-let eq_expr = (x.clone() + y.clone()).eq(ArithExpr::from(10));
-let gt_expr = x.gt(ArithExpr::from(6));
+let eq_expr = (&x + &y).eq(10);
+let gt_expr = x.gt(6);
 
 // 1) Assert constraints into the network.
 //    `assert` returns false only for immediate/trivial inconsistencies.

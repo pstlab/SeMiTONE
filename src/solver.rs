@@ -397,7 +397,7 @@ mod tests {
         let mut solver = Solver::new();
         let x = solver.smt.new_int();
 
-        let expr = x.clone().gt(ArithExpr::from((12, 10))) & x.clone().lt(ArithExpr::from((28, 10)));
+        let expr = x.clone().gt((12, 10)) & x.clone().lt((28, 10));
 
         assert!(solver.smt.assert(&expr), "The system should be asserted successfully, as it has valid integer solutions.");
 
@@ -412,8 +412,8 @@ mod tests {
         let z = solver.smt.new_real();
 
         // x = 15, y = 10
-        let eq_x = x.clone().eq(ArithExpr::from(15));
-        let eq_y = y.clone().eq(ArithExpr::from(10));
+        let eq_x = x.clone().eq(15);
+        let eq_y = y.clone().eq(10);
 
         // z = min(x, y)
         let min_expr = min(z.clone(), [x.clone(), y.clone()]);
@@ -434,17 +434,17 @@ mod tests {
         let x = solver.smt.new_real();
 
         // x >= 10
-        assert!(solver.smt.assert(&x.clone().ge(ArithExpr::from(10))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().ge(10)), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 is SAT");
 
         solver.smt.push();
         // x <= 20
-        assert!(solver.smt.assert(&x.clone().le(ArithExpr::from(20))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().le(20)), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 and x <= 20 is SAT");
 
         solver.smt.push();
         // x <= 5
-        assert!(!solver.smt.assert(&x.clone().le(ArithExpr::from(5))), "x >= 10 and x <= 5 is UNSAT");
+        assert!(!solver.smt.assert(&x.clone().le(5)), "x >= 10 and x <= 5 is UNSAT");
 
         solver.smt.pop();
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 and x <= 20 is SAT after popping the last scope");
@@ -454,7 +454,7 @@ mod tests {
         assert!(val <= InfRational::new(Rational::Finite(rug::Rational::from(20)), rug::Rational::from(0)));
 
         solver.smt.pop();
-        assert!(solver.smt.assert(&x.clone().ge(ArithExpr::from(50))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().ge(50)), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 50 is SAT after popping all scopes");
     }
 
@@ -464,11 +464,11 @@ mod tests {
         let x = solver.smt.new_int();
         let y = solver.smt.new_int();
 
-        let eq_expr = (ArithExpr::from(3) * x.clone() + ArithExpr::from(3) * y.clone()).eq(ArithExpr::from(10));
+        let eq_expr = (ArithExpr::from(3) * &x + ArithExpr::from(3) * &y).eq(ArithExpr::from(10));
 
         // Gomory cuts require variables to be bounded to effectively prune.
         // Without bounds, the cut becomes a tautology, leading to stagnation.
-        let bounds = (x.clone().ge(ArithExpr::from(0))) & (y.clone().ge(ArithExpr::from(0)));
+        let bounds = (x.clone().ge(0)) & (y.clone().ge(0));
 
         assert!(solver.smt.assert(&(eq_expr & bounds)), "The system should be asserted successfully, as it has valid integer solutions.");
 
@@ -484,7 +484,7 @@ mod tests {
         // 3x + 4y = 10, with x >= 0 and y >= 0
         let eq_expr = (ArithExpr::from(3) * x.clone() + ArithExpr::from(4) * y.clone()).eq(ArithExpr::from(10));
 
-        let bounds = (x.clone().ge(ArithExpr::from(0))) & (y.clone().ge(ArithExpr::from(0)));
+        let bounds = (x.clone().ge(0)) & (y.clone().ge(0));
 
         assert!(solver.smt.assert(&(eq_expr & bounds)), "The system should be asserted successfully, as it has valid integer solutions.");
 
