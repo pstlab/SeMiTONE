@@ -1,12 +1,12 @@
 [package]
 name = "semitone"
-version = "0.0.9"
+version = "0.0.10"
 authors = ["Riccardo De Benedictis"]
 edition = "2024"
 description = "SeMiTONE is a Satisfiability Modulo TheOries NEtwork, allowing the creation of variables and constraints in different underlying theories."
 readme = "README.md"
 repository = "https://github.com/pstlab/SeMiTONE"
-license-file = "LICENSE"
+license = "MIT"
 keywords = ["smt", "solver", "dpllt", "logic", "optimization"]
 categories = ["algorithms", "mathematics", "science"]
 
