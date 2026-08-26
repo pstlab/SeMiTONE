@@ -1,5 +1,5 @@
 use crate::{
-    ast::{ArithExpr, BoolExpr, Expr, add, and, eq_arith, ge, gt, le, lt, mul, or},
+    ast::{ArithExpr, BoolExpr},
     rational::Rational,
     solver::Solver,
 };
@@ -199,33 +199,20 @@ impl<'a> SmtParser<'a> {
             concrete::Term::Application { qual_identifier, arguments } => {
                 let op = Self::symbol_of_qual_identifier(qual_identifier);
                 match op {
-                    "and" => and(arguments.iter().map(|a| self.translate_bool_term(a))),
-                    "or" => or(arguments.iter().map(|a| self.translate_bool_term(a))),
+                    "and" => BoolExpr::And(arguments.iter().map(|a| self.translate_bool_term(a)).collect()),
+                    "or" => BoolExpr::Or(arguments.iter().map(|a| self.translate_bool_term(a)).collect()),
                     "not" => !(self.translate_bool_term(&arguments[0])),
-                    "=>" => {
-                        // A => B is equivalent to (not A) or B
-                        let a = self.translate_bool_term(&arguments[0]);
-                        let b = self.translate_bool_term(&arguments[1]);
-                        or([!(a), b])
-                    }
-                    "<=" => le(self.translate_arith_term(&arguments[0]), self.translate_arith_term(&arguments[1])),
-                    ">=" => ge(self.translate_arith_term(&arguments[0]), self.translate_arith_term(&arguments[1])),
-                    "<" => lt(self.translate_arith_term(&arguments[0]), self.translate_arith_term(&arguments[1])),
-                    ">" => gt(self.translate_arith_term(&arguments[0]), self.translate_arith_term(&arguments[1])),
+                    "=>" => !self.translate_bool_term(&arguments[0]) | self.translate_bool_term(&arguments[1]),
+                    "<=" => self.translate_arith_term(&arguments[0]).le(self.translate_arith_term(&arguments[1])),
+                    ">=" => self.translate_arith_term(&arguments[0]).ge(self.translate_arith_term(&arguments[1])),
+                    "<" => self.translate_arith_term(&arguments[0]).lt(self.translate_arith_term(&arguments[1])),
+                    ">" => self.translate_arith_term(&arguments[0]).gt(self.translate_arith_term(&arguments[1])),
                     "=" => {
                         // SMT-LIB '=' is overloaded for both Booleans and Reals/Ints.
                         // We attempt to parse the first argument as Arith. If it fails (panics),
                         // it should theoretically be handled as Bool.
                         // For a robust implementation, checking the symbol map is safer.
-                        let first_arg_is_bool = self.is_bool_term(&arguments[0]);
-
-                        if first_arg_is_bool {
-                            let b1 = self.translate_bool_term(&arguments[0]);
-                            let b2 = self.translate_bool_term(&arguments[1]);
-                            BoolExpr::Eq(Box::new(Expr::Bool(b1)), Box::new(Expr::Bool(b2)))
-                        } else {
-                            eq_arith(self.translate_arith_term(&arguments[0]), self.translate_arith_term(&arguments[1]))
-                        }
+                        if self.is_bool_term(&arguments[0]) { self.translate_bool_term(&arguments[0]).eq(self.translate_bool_term(&arguments[1])) } else { self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1])) }
                     }
                     _ => panic!("Unsupported boolean operator: {}", op),
                 }
@@ -262,8 +249,8 @@ impl<'a> SmtParser<'a> {
                 let args: Vec<_> = arguments.iter().map(|a| self.translate_arith_term(a)).collect();
 
                 match op {
-                    "+" => add(args),
-                    "*" => mul(args),
+                    "+" => ArithExpr::Add(args),
+                    "*" => ArithExpr::Mul(args),
                     "-" => {
                         if args.len() == 1 {
                             ArithExpr::Neg(Box::new(args.into_iter().next().unwrap()))
@@ -275,7 +262,7 @@ impl<'a> SmtParser<'a> {
                             for arg in iter {
                                 sum_args.push(ArithExpr::Neg(Box::new(arg)));
                             }
-                            add(sum_args)
+                            ArithExpr::Add(sum_args)
                         }
                     }
                     "/" => {

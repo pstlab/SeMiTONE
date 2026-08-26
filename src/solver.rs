@@ -233,7 +233,7 @@ impl BranchingHeuristics {
 mod tests {
     use super::*;
     use crate::{
-        ast::{Expr, min},
+        ast::{ArithExpr, EnumExpr, Expr, min},
         rational::{InfRational, Rational},
     };
 
@@ -245,13 +245,12 @@ mod tests {
         let z = solver.smt.new_real();
 
         // 2x - y + z == 10
-        let exp1 = add([mul([cst_arith(2), x.clone()]), mul([cst_arith(-1), y.clone()]), z.clone()]);
-        let eq1 = eq_arith(exp1, cst_arith(10));
+        let exp1 = ((ArithExpr::from(2) * x.clone()) - y.clone() + z.clone()).eq(ArithExpr::from(10));
 
         // x > 0, y > 0, z > 0
-        let bnd = and([gt(x.clone(), cst_arith(0)), gt(y.clone(), cst_arith(0)), gt(z.clone(), cst_arith(0))]);
+        let bnd = (x.clone().gt(ArithExpr::from(0))) & (y.clone().gt(ArithExpr::from(0))) & (z.clone().gt(ArithExpr::from(0)));
 
-        let result = solver.smt.assert(&and([eq1, bnd]));
+        let result = solver.smt.assert(&(exp1 & bnd));
         assert!(result, "The system should be asserted successfully, as it has valid real solutions.");
 
         // Triggers the search loop to assign values to the slack variables
@@ -264,10 +263,10 @@ mod tests {
         let a = solver.smt.new_bool();
         let b = solver.smt.new_bool();
 
-        let nested_and = and([a.clone(), b.clone()]);
-        let nested_or = or([!a.clone(), BoolExpr::False]);
+        let nested_and = a.clone() & b.clone();
+        let nested_or = !a.clone() | BoolExpr::False;
 
-        let root_or = or([nested_and, nested_or, BoolExpr::True]);
+        let root_or = nested_and | nested_or | BoolExpr::True;
 
         assert!(solver.smt.assert(&root_or), "The system should be asserted successfully, as it has valid boolean solutions.");
         assert_eq!(solver.check_sat(), Some(true), "The system has valid boolean solutions and should be SAT");
@@ -278,13 +277,13 @@ mod tests {
         let mut solver = Solver::new();
         let x = solver.smt.new_real();
 
-        let atom_lt = lt(x.clone(), cst_arith(5));
-        let atom_ge = ge(x.clone(), cst_arith(10));
-        let atom_le = le(x.clone(), cst_arith(0));
-        let atom_gt = gt(x.clone(), cst_arith(20));
+        let atom_lt = x.clone().lt(ArithExpr::from(5));
+        let atom_ge = x.clone().ge(ArithExpr::from(10));
+        let atom_le = x.clone().le(ArithExpr::from(0));
+        let atom_gt = x.clone().gt(ArithExpr::from(20));
 
-        let disjunction1 = or([atom_lt, atom_ge]);
-        let disjunction2 = or([atom_le, atom_gt]);
+        let disjunction1 = atom_lt | atom_ge;
+        let disjunction2 = atom_le | atom_gt;
 
         assert!(solver.smt.assert(&disjunction1), "The system should be asserted successfully, as it has valid real solutions.");
         assert!(solver.smt.assert(&disjunction2), "The system should be asserted successfully, as it has valid real solutions.");
@@ -299,7 +298,7 @@ mod tests {
 
         let eq_expr = BoolExpr::Eq(Box::new(Expr::Bool(a.clone())), Box::new(Expr::Bool(b.clone())));
 
-        assert!(solver.smt.assert(&and([eq_expr, a])), "The system should be asserted successfully, as it has valid boolean solutions.");
+        assert!(solver.smt.assert(&(eq_expr & a)), "The system should be asserted successfully, as it has valid boolean solutions.");
         assert_eq!(solver.check_sat(), Some(true), "The system has valid boolean solutions and should be SAT");
 
         assert_eq!(solver.smt.get_bool_val(&b), Some(true));
@@ -311,7 +310,7 @@ mod tests {
         let x = solver.smt.new_real();
 
         // (x < 0 ∨ x > 10) ∧ (x > 5) ∧ (x < 15)
-        let expr = and([or([lt(x.clone(), cst_arith(0)), gt(x.clone(), cst_arith(10))]), gt(x.clone(), cst_arith(5)), lt(x.clone(), cst_arith(15))]);
+        let expr = (x.clone().lt(ArithExpr::from(0)) | x.clone().gt(ArithExpr::from(10))) & x.clone().gt(ArithExpr::from(5)) & x.clone().lt(ArithExpr::from(15));
 
         let result = solver.smt.assert(&expr);
         assert!(result, "The system should be asserted successfully, as it has valid real solutions.");
@@ -329,11 +328,11 @@ mod tests {
         let x = solver.smt.new_real();
         let y = solver.smt.new_real();
 
-        let not_eq = !eq_arith(x.clone(), y.clone());
+        let not_eq = !(x.clone().eq(y.clone()));
 
-        let force_lt = and([lt(x.clone(), cst_arith(10)), gt(y.clone(), cst_arith(20))]);
+        let force_lt = x.clone().lt(ArithExpr::from(10)) & y.clone().gt(ArithExpr::from(20));
 
-        let expr = and([not_eq, force_lt]);
+        let expr = not_eq & force_lt;
 
         let result = solver.smt.assert(&expr);
         assert!(result, "The system should be asserted successfully, as it has valid real solutions.");
@@ -348,7 +347,7 @@ mod tests {
         let mut solver = Solver::new();
         let e = solver.smt.new_enum(vec![1, 2, 3]);
 
-        let expr = eq_enum(e, cst_enum(2));
+        let expr = e.clone().eq(EnumExpr::from(2));
 
         assert!(solver.smt.assert(&expr), "The system should be asserted successfully, as it has valid enum solutions.");
         assert_eq!(solver.check_sat(), Some(true), "The solver should find a valid assignment for the enum variable");
@@ -360,12 +359,12 @@ mod tests {
         let e1 = solver.smt.new_enum(vec![1, 2, 3]);
         let e2 = solver.smt.new_enum(vec![3, 4, 5]);
 
-        let eq_expr = eq_enum(e1.clone(), e2.clone());
+        let eq_expr = e1.clone().eq(e2.clone());
 
         assert!(solver.smt.assert(&eq_expr), "The system should be asserted successfully, as it has valid enum solutions.");
         assert_eq!(solver.check_sat(), Some(true), "Solver should find a valid assignment for e1 and e2 where they are equal (SAT)");
 
-        let not_3 = !(eq_enum(e1.clone(), cst_enum(3)));
+        let not_3 = !(e1.clone().eq(EnumExpr::from(3)));
         assert!(!solver.smt.assert(&not_3), "The system should not be asserted successfully, as it has no valid enum solutions.");
     }
 
@@ -374,7 +373,7 @@ mod tests {
         let mut solver = Solver::new();
         let e = solver.smt.new_enum(vec![1, 2, 3]);
 
-        let expr = and([or([eq_enum(e.clone(), cst_enum(1)), eq_enum(e.clone(), cst_enum(2))]), !(eq_enum(e.clone(), cst_enum(1)))]);
+        let expr = (e.clone().eq(EnumExpr::from(1)) | e.clone().eq(EnumExpr::from(2))) & !(e.clone().eq(EnumExpr::from(1)));
 
         assert!(solver.smt.assert(&expr), "The system should be asserted successfully, as it has valid enum solutions.");
 
@@ -386,7 +385,7 @@ mod tests {
         let mut solver = Solver::new();
         let x = solver.smt.new_int();
 
-        let eq_expr = eq_arith(mul([cst_arith(2), x.clone()]), cst_arith(3));
+        let eq_expr = (ArithExpr::from(2) * x.clone()).eq(ArithExpr::from(3));
 
         assert!(solver.smt.assert(&eq_expr), "The system should be asserted successfully, as it has valid integer solutions.");
 
@@ -398,7 +397,7 @@ mod tests {
         let mut solver = Solver::new();
         let x = solver.smt.new_int();
 
-        let expr = and([gt(x.clone(), cst_frac(12, 10)), lt(x.clone(), cst_frac(28, 10))]);
+        let expr = x.clone().gt(ArithExpr::from((12, 10))) & x.clone().lt(ArithExpr::from((28, 10)));
 
         assert!(solver.smt.assert(&expr), "The system should be asserted successfully, as it has valid integer solutions.");
 
@@ -413,13 +412,13 @@ mod tests {
         let z = solver.smt.new_real();
 
         // x = 15, y = 10
-        let eq_x = eq_arith(x.clone(), cst_arith(15));
-        let eq_y = eq_arith(y.clone(), cst_arith(10));
+        let eq_x = x.clone().eq(ArithExpr::from(15));
+        let eq_y = y.clone().eq(ArithExpr::from(10));
 
         // z = min(x, y)
         let min_expr = min(z.clone(), [x.clone(), y.clone()]);
 
-        let expr = and([eq_x, eq_y, min_expr]);
+        let expr = eq_x & eq_y & min_expr;
         assert!(solver.smt.assert(&expr), "The system should be asserted successfully, as it has valid real solutions.");
 
         // DPLL(T) should resolve this and guess z = 10
@@ -435,17 +434,17 @@ mod tests {
         let x = solver.smt.new_real();
 
         // x >= 10
-        assert!(solver.smt.assert(&ge(x.clone(), cst_arith(10))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().ge(ArithExpr::from(10))), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 is SAT");
 
         solver.smt.push();
         // x <= 20
-        assert!(solver.smt.assert(&le(x.clone(), cst_arith(20))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().le(ArithExpr::from(20))), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 and x <= 20 is SAT");
 
         solver.smt.push();
         // x <= 5
-        assert!(!solver.smt.assert(&le(x.clone(), cst_arith(5))), "x >= 10 and x <= 5 is UNSAT");
+        assert!(!solver.smt.assert(&x.clone().le(ArithExpr::from(5))), "x >= 10 and x <= 5 is UNSAT");
 
         solver.smt.pop();
         assert_eq!(solver.check_sat(), Some(true), "x >= 10 and x <= 20 is SAT after popping the last scope");
@@ -455,7 +454,7 @@ mod tests {
         assert!(val <= InfRational::new(Rational::Finite(rug::Rational::from(20)), rug::Rational::from(0)));
 
         solver.smt.pop();
-        assert!(solver.smt.assert(&ge(x.clone(), cst_arith(50))), "The system should be asserted successfully, as it has valid real solutions.");
+        assert!(solver.smt.assert(&x.clone().ge(ArithExpr::from(50))), "The system should be asserted successfully, as it has valid real solutions.");
         assert_eq!(solver.check_sat(), Some(true), "x >= 50 is SAT after popping all scopes");
     }
 
@@ -465,13 +464,13 @@ mod tests {
         let x = solver.smt.new_int();
         let y = solver.smt.new_int();
 
-        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(3), y.clone()])]), cst_arith(10));
+        let eq_expr = (ArithExpr::from(3) * x.clone() + ArithExpr::from(3) * y.clone()).eq(ArithExpr::from(10));
 
         // Gomory cuts require variables to be bounded to effectively prune.
         // Without bounds, the cut becomes a tautology, leading to stagnation.
-        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
+        let bounds = (x.clone().ge(ArithExpr::from(0))) & (y.clone().ge(ArithExpr::from(0)));
 
-        assert!(solver.smt.assert(&and([eq_expr, bounds])), "The system should be asserted successfully, as it has valid integer solutions.");
+        assert!(solver.smt.assert(&(eq_expr & bounds)), "The system should be asserted successfully, as it has valid integer solutions.");
 
         assert_eq!(solver.check_sat(), Some(false), "3x + 3y = 10 has no integer solutions, must be UNSAT");
     }
@@ -483,11 +482,11 @@ mod tests {
         let y = solver.smt.new_int();
 
         // 3x + 4y = 10, with x >= 0 and y >= 0
-        let eq_expr = eq_arith(add([mul([cst_arith(3), x.clone()]), mul([cst_arith(4), y.clone()])]), cst_arith(10));
+        let eq_expr = (ArithExpr::from(3) * x.clone() + ArithExpr::from(4) * y.clone()).eq(ArithExpr::from(10));
 
-        let bounds = and([ge(x.clone(), cst_arith(0)), ge(y.clone(), cst_arith(0))]);
+        let bounds = (x.clone().ge(ArithExpr::from(0))) & (y.clone().ge(ArithExpr::from(0)));
 
-        assert!(solver.smt.assert(&and([eq_expr, bounds])), "The system should be asserted successfully, as it has valid integer solutions.");
+        assert!(solver.smt.assert(&(eq_expr & bounds)), "The system should be asserted successfully, as it has valid integer solutions.");
 
         assert_eq!(solver.check_sat(), Some(true), "Il sistema ha una soluzione intera e deve essere SAT");
 
