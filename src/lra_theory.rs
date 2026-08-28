@@ -442,39 +442,22 @@ impl LraTheory {
             let mut best_magnitude: Option<RugRational> = None;
 
             for (v, coeff) in obj_row.iter() {
-                let v = *v;
-                let dir = if maximize {
-                    if coeff.is_positive() {
-                        true
-                    } else if coeff.is_negative() {
-                        false
-                    } else {
-                        continue;
-                    }
-                } else if coeff.is_negative() {
-                    true
-                } else if coeff.is_positive() {
-                    false
-                } else {
+                if !coeff.is_positive() && !coeff.is_negative() {
                     continue;
-                };
+                }
 
-                let movable = match dir {
-                    true => self.value(v) < self.ub(v),
-                    false => self.value(v) > self.lb(v),
-                };
+                let dir = maximize == coeff.is_positive();
+
+                let movable = if dir { self.value(*v) < self.ub(*v) } else { self.value(*v) > self.lb(*v) };
                 if !movable {
                     continue;
                 }
 
                 let magnitude = if coeff.is_positive() { coeff.clone() } else { -coeff.clone() };
-                let better = match &best_magnitude {
-                    None => true,
-                    Some(cur) => magnitude > *cur,
-                };
-                if better {
+
+                if best_magnitude.as_ref().map_or(true, |cur| magnitude > *cur) {
                     best_magnitude = Some(magnitude);
-                    entering = Some((v, dir));
+                    entering = Some((*v, dir));
                 }
             }
 
@@ -486,10 +469,8 @@ impl LraTheory {
             let mut leaving: Option<usize> = None;
             let mut leaving_target: Option<InfRational> = None;
 
-            let self_bound = match dir {
-                true => self.ub(entering_var).clone(),
-                false => self.lb(entering_var).clone(),
-            };
+            let self_bound = if dir { self.ub(entering_var) } else { self.lb(entering_var) }.clone();
+
             if matches!(self_bound.rational_part(), Rational::Finite(_)) {
                 best_target = Some(self_bound.clone());
                 leaving_target = Some(self_bound);
@@ -497,25 +478,26 @@ impl LraTheory {
 
             let watched_rows: Vec<usize> = self.t_watches[entering_var].iter().copied().collect();
             for row_var in watched_rows {
-                let coeff = self.tableau[&row_var].get(&entering_var).expect("watched variable must occur in tableau row").clone();
-                let moves_up = match dir {
-                    true => coeff.is_positive(),
-                    false => coeff.is_negative(),
-                };
-                let bound = if moves_up { self.ub(row_var).clone() } else { self.lb(row_var).clone() };
+                let coeff = self.tableau[&row_var].get(&entering_var).expect("watched variable must occur in tableau row");
+
+                let moves_up = dir == coeff.is_positive();
+                let bound = if moves_up { self.ub(row_var) } else { self.lb(row_var) }.clone();
+
                 if !matches!(bound.rational_part(), Rational::Finite(_)) {
                     continue;
                 }
 
-                let signed_delta = (bound.clone() - self.value(row_var).clone()) / &coeff;
-                let mut target = self.value(entering_var).clone();
-                target += signed_delta;
+                let signed_delta = (bound.clone() - self.value(row_var).clone()) / coeff;
+                let target = self.value(entering_var).clone() + signed_delta;
 
-                let is_better = match (&best_target, dir) {
-                    (None, _) => true,
-                    (Some(cur), true) => target < *cur || (target == *cur && leaving.map_or(false, |l| row_var < l)),
-                    (Some(cur), false) => target > *cur || (target == *cur && leaving.map_or(false, |l| row_var < l)),
+                let is_better = match &best_target {
+                    None => true,
+                    Some(cur) => {
+                        let better_val = if dir { target < *cur } else { target > *cur };
+                        better_val || (target == *cur && leaving.map_or(false, |l| row_var < l))
+                    }
                 };
+
                 if is_better {
                     best_target = Some(target);
                     leaving = Some(row_var);
