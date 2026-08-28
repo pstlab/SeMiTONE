@@ -180,7 +180,7 @@ impl SatSolver {
                 for k in 1..c.lits.len() {
                     let v = c.lits[k].var();
                     if !self.seen[v] && self.level(v).unwrap_or(0) > 0 {
-                        redundant = false; // C'è una dipendenza esterna
+                        redundant = false; // There is an external dependency
                         break;
                     }
                 }

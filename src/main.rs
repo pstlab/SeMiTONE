@@ -19,7 +19,7 @@ fn main() {
         io::stdin().read_to_string(&mut buffer).expect("Failed to read from stdin");
         runner.run_str(&buffer);
     } else {
-        // Altrimenti, apri normalmente il file
+        // Otherwise, open the file normally
         runner.run_file(file_path);
     }
 }

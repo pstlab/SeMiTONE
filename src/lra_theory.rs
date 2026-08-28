@@ -45,13 +45,11 @@ impl LraTheory {
 
     fn mk_var(&mut self, is_int: bool) -> usize {
         let var = self.reals.len();
-
         self.ints.push(is_int);
         self.reals.push(Self::zero());
         self.lbs.push((None, Self::negative_inf()));
         self.ubs.push((None, Self::positive_inf()));
         self.t_watches.push(FxHashSet::default());
-
         var
     }
 
@@ -72,11 +70,10 @@ impl LraTheory {
     }
 
     fn row_value(&self, row: &SparseRow) -> InfRational {
-        let mut acc = Self::zero();
-        for (v, c) in row.iter() {
+        row.iter().fold(Self::zero(), |mut acc, (v, c)| {
             acc += &self.reals[*v] * c;
-        }
-        acc
+            acc
+        })
     }
 
     pub(super) fn get_or_create_slack(&mut self, vars: SparseRow) -> usize {
@@ -85,14 +82,7 @@ impl LraTheory {
         }
 
         let slack = self.mk_real();
-
-        // Keep the new basic slack variable consistent with the current model:
-        // slack = sum(coeff_i * var_i).
-        let mut slack_value = Self::zero();
-        for (var, coeff) in vars.iter() {
-            slack_value += &self.reals[*var] * coeff;
-        }
-        self.reals[slack] = slack_value;
+        self.reals[slack] = self.row_value(&vars);
 
         self.tableau.insert(slack, vars.clone());
         for &var in vars.keys() {
@@ -119,14 +109,7 @@ impl LraTheory {
         }
 
         if &new_lb > self.ub(var) {
-            let mut conflict = Vec::with_capacity(2);
-            if let Some(l) = lit {
-                conflict.push(!l);
-            }
-            if let Some(guard) = self.ubs[var].0 {
-                conflict.push(!guard);
-            }
-            return Err(conflict);
+            return Err([lit, self.ubs[var].0].into_iter().flatten().map(|l| !l).collect());
         }
 
         let (c_lit, val) = self.lbs[var].clone();
@@ -147,14 +130,7 @@ impl LraTheory {
         }
 
         if &new_ub < self.lb(var) {
-            let mut conflict = Vec::with_capacity(2);
-            if let Some(l) = lit {
-                conflict.push(!l);
-            }
-            if let Some(guard) = self.lbs[var].0 {
-                conflict.push(!guard);
-            }
-            return Err(conflict);
+            return Err([lit, self.lbs[var].0].into_iter().flatten().map(|l| !l).collect());
         }
 
         let (c_lit, val) = self.ubs[var].clone();
@@ -184,7 +160,6 @@ impl LraTheory {
         }
 
         let watched_rows: Vec<usize> = self.t_watches[var].iter().copied().collect();
-
         for row_var in watched_rows {
             let coeff = self.tableau[&row_var].get(&var).expect("watched variable must occur in tableau row").clone();
             let delta = &delta_var * &coeff;
@@ -196,80 +171,59 @@ impl LraTheory {
 
     pub fn check(&mut self) -> Result<(), Vec<Lit>> {
         loop {
-            // we search for a basic variable whose value is not within its bounds..
-            let var = self.tableau.iter().find_map(|(&var, _)| {
-                if self.value(var) < self.lb(var) {
-                    Some((var, self.lb(var).clone()))
-                } else if self.value(var) > self.ub(var) {
-                    Some((var, self.ub(var).clone()))
+            // Find a basic variable outside its bounds (is_below indicates a lower-bound violation)
+            let var = self.tableau.keys().find_map(|&var| {
+                let val = self.value(var);
+                if val < self.lb(var) {
+                    Some((var, self.lb(var).clone(), true))
+                } else if val > self.ub(var) {
+                    Some((var, self.ub(var).clone(), false))
                 } else {
                     None
                 }
             });
-            if let Some((leaving, val)) = var {
-                // .. if we find one, we try to pivot it with a non-basic variable that can take it back within bounds
-                if self.value(leaving) < &val {
-                    let entering = (&self.tableau[&leaving]).into_iter().find_map(|(v, coeff)| if (coeff.is_positive() && self.value(*v) < self.ub(*v)) || (coeff.is_negative() && self.value(*v) > self.lb(*v)) { Some(*v) } else { None });
-                    if let Some(entering) = entering {
-                        self.pivot_and_update(entering, leaving, val.clone());
-                    } else {
-                        let mut conflict = Vec::new();
-                        for (vr, vl) in &self.tableau[&leaving] {
-                            if vl.is_positive()
-                                && let Some(guard_lit) = self.ubs[*vr].0
-                            {
-                                conflict.push(!guard_lit);
-                            } else if vl.is_negative()
-                                && let Some(guard_lit) = self.lbs[*vr].0
-                            {
-                                conflict.push(!guard_lit);
-                            }
-                        }
-                        if let Some(guard_lit) = self.lbs[leaving].0 {
-                            conflict.push(!guard_lit);
-                        }
-                        return Err(conflict);
-                    }
-                }
-                if self.value(leaving) > &val {
-                    let entering = (&self.tableau[&leaving]).into_iter().find_map(|(v, coeff)| if (coeff.is_positive() && self.value(*v) > self.lb(*v)) || (coeff.is_negative() && self.value(*v) < self.ub(*v)) { Some(*v) } else { None });
-                    if let Some(entering) = entering {
-                        self.pivot_and_update(entering, leaving, val);
-                    } else {
-                        let mut conflict = Vec::new();
-                        for (vr, vl) in &self.tableau[&leaving] {
-                            if vl.is_positive()
-                                && let Some(guard_lit) = self.lbs[*vr].0
-                            {
-                                conflict.push(!guard_lit);
-                            } else if vl.is_negative()
-                                && let Some(guard_lit) = self.ubs[*vr].0
-                            {
-                                conflict.push(!guard_lit);
-                            }
-                        }
-                        if let Some(guard_lit) = self.ubs[leaving].0 {
-                            conflict.push(!guard_lit);
-                        }
-                        self.minimize_conflict(&mut conflict);
-                        return Err(conflict);
-                    }
-                }
+
+            let Some((leaving, target_val, is_below)) = var else {
+                return Ok(());
+            };
+
+            // Find a pivot variable based on the required direction
+            let entering = self.tableau[&leaving].iter().find_map(|(v, coeff)| {
+                let moves_up = is_below == coeff.is_positive();
+                let can_move = if moves_up { self.value(*v) < self.ub(*v) } else { self.value(*v) > self.lb(*v) };
+                can_move.then_some(v)
+            });
+
+            if let Some(entering) = entering {
+                self.pivot_and_update(*entering, leaving, target_val);
             } else {
-                return Ok(()); // all basic variables are within bounds, we are done
+                // Build the conflict clause compactly
+                let mut conflict = Vec::new();
+                for (vr, coeff) in &self.tableau[&leaving] {
+                    let guard = if is_below == coeff.is_positive() { self.ubs[*vr].0 } else { self.lbs[*vr].0 };
+                    if let Some(l) = guard {
+                        conflict.push(!l);
+                    }
+                }
+
+                let self_guard = if is_below { self.lbs[leaving].0 } else { self.ubs[leaving].0 };
+                if let Some(l) = self_guard {
+                    conflict.push(!l);
+                }
+
+                self.minimize_conflict(&mut conflict);
+                return Err(conflict);
             }
         }
     }
 
+    /// Minimizes the conflict by sorting and removing duplicates.
     fn minimize_conflict(&self, conflict: &mut Vec<Lit>) {
         if conflict.len() <= 1 {
             return;
         }
-
         conflict.sort_unstable();
         conflict.dedup();
-
-        conflict.retain(|_lit| true);
     }
 
     fn pivot(&mut self, entering: usize, leaving: usize) {
@@ -279,13 +233,11 @@ impl LraTheory {
         assert!(!self.is_basic(entering), "entering variable must be non-basic");
 
         let leaving_row_vars: Vec<usize> = self.tableau[&leaving].keys().copied().collect();
-
         for var in leaving_row_vars {
             self.t_watches[var].remove(&leaving);
         }
 
         let mut new_row = self.tableau.remove(&leaving).expect("leaving variable must have a tableau row");
-
         let pivot_coeff = new_row.remove(&entering).expect("entering variable must occur in leaving row");
         assert!(!pivot_coeff.is_zero(), "pivot coefficient must be non-zero");
 
@@ -302,7 +254,6 @@ impl LraTheory {
             if row_var == leaving {
                 continue;
             }
-
             let Some(row) = self.tableau.get_mut(&row_var) else {
                 continue;
             };
@@ -320,6 +271,7 @@ impl LraTheory {
         self.tableau.insert(entering, new_row);
     }
 
+    /// Updates the values of the variables after a pivot operation.
     fn pivot_and_update(&mut self, entering: usize, leaving: usize, new_value: InfRational) {
         assert!(entering < self.reals.len(), "variable index out of bounds: {entering}");
         assert!(leaving < self.reals.len(), "variable index out of bounds: {leaving}");
@@ -336,16 +288,13 @@ impl LraTheory {
         self.reals[entering] += &theta;
 
         let affected_rows: Vec<usize> = self.t_watches[entering].iter().copied().collect();
-
         for row_var in affected_rows {
             if row_var == leaving {
                 continue;
             }
-
             let Some(row) = self.tableau.get(&row_var) else {
                 continue;
             };
-
             let Some(coeff) = row.get(&entering) else {
                 continue;
             };
@@ -356,27 +305,26 @@ impl LraTheory {
         self.pivot(entering, leaving);
     }
 
+    /// Checks if all integer variables have integer values.
     pub(super) fn check_ints(&self) -> Result<(), (usize, Rational)> {
-        for (var, &is_int) in self.ints.iter().enumerate() {
-            if is_int {
-                let val = self.value(var);
-                if !val.infinitesimal_part().is_zero() || !val.rational_part().is_integer() {
-                    return Err((var, val.rational_part().clone()));
-                }
-            }
+        if let Some((var, val)) = self.ints.iter().enumerate().filter(|(_, is_int)| **is_int).find_map(|(var, _)| {
+            let val = self.value(var);
+            (!val.infinitesimal_part().is_zero() || !val.rational_part().is_integer()).then_some((var, val))
+        }) {
+            return Err((var, val.rational_part().clone()));
         }
         Ok(())
     }
 
+    /// Returns the fractional part of a rational number.
+    /// The fractional part is defined as the difference between the number and its floor.
     fn fract_part(val: &rug::Rational) -> rug::Rational {
         let mut floor = val.clone();
         floor.floor_mut();
-
-        let mut f = val.clone();
-        f -= floor;
-        f
+        val.clone() - floor
     }
 
+    /// Generates a Gomory cut for the given basic variable if it has a fractional value.
     pub(super) fn generate_gomory_cut(&mut self, basic_var: usize) -> Option<(SparseRow, rug::Rational)> {
         let Rational::Finite(val) = self.value(basic_var).rational_part() else { unreachable!("basic variable should have a finite rational value") };
         let f0 = Self::fract_part(val);
@@ -399,11 +347,7 @@ impl LraTheory {
             }
         }
 
-        if cut_row.is_empty() {
-            return None;
-        }
-
-        Some((cut_row, f0))
+        (!cut_row.is_empty()).then_some((cut_row, f0))
     }
 
     pub(super) fn push(&mut self) {
@@ -414,19 +358,12 @@ impl LraTheory {
         if level >= self.trail_lim.len() {
             return;
         }
-
         let target_len = self.trail_lim[level];
 
-        while self.bound_trail.len() > target_len {
-            let update = self.bound_trail.pop().expect("trail should contain an update");
-
+        for update in self.bound_trail.drain(target_len..).rev() {
             match update {
-                BoundUpdate::LowerBound { lit, var, val } => {
-                    self.lbs[var] = (lit, val);
-                }
-                BoundUpdate::UpperBound { lit, var, val } => {
-                    self.ubs[var] = (lit, val);
-                }
+                BoundUpdate::LowerBound { lit, var, val } => self.lbs[var] = (lit, val),
+                BoundUpdate::UpperBound { lit, var, val } => self.ubs[var] = (lit, val),
             }
         }
 
@@ -508,7 +445,7 @@ impl LraTheory {
             match (leaving, leaving_target) {
                 (None, None) => return if maximize { Self::positive_inf() } else { Self::negative_inf() },
                 (None, Some(new_value)) => {
-                    self.update(entering_var, new_value); // bound flip, obj_row resta valida
+                    self.update(entering_var, new_value); // bound flip, obj_row remains valid
                 }
                 (Some(leaving_var), Some(new_value)) => {
                     self.pivot_and_update(entering_var, leaving_var, new_value);
@@ -572,7 +509,7 @@ impl SparseRow {
     }
 
     pub fn remove(&mut self, var: &usize) -> Option<RugRational> {
-        if let Ok(idx) = self.terms.binary_search_by_key(var, |&(v, _)| v) { Some(self.terms.remove(idx).1) } else { None }
+        self.terms.binary_search_by_key(var, |&(v, _)| v).ok().map(|idx| self.terms.remove(idx).1)
     }
 
     pub fn retain<F>(&mut self, mut f: F)
@@ -953,7 +890,7 @@ mod tests {
         let x = lra.mk_real(); // 0
 
         lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        // nessun upper bound: resta +inf di default
+        // No upper bound: remains +inf by default
 
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, true);

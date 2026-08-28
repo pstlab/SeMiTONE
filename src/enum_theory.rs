@@ -77,7 +77,7 @@ impl EnumTheory {
 
     pub(super) fn set_neq(&mut self, lit: Option<Lit>, var: usize, val: i32) -> Result<bool, Vec<Lit>> {
         if !self.active_domains[var].contains(&val) {
-            return Ok(false); // Già rimosso in precedenza
+            return Ok(false); // Already removed
         }
 
         self.active_domains[var].remove(&val);
