@@ -392,7 +392,7 @@ impl LraTheory {
 
                 let magnitude = if coeff.is_positive() { coeff.clone() } else { -coeff.clone() };
 
-                if best_magnitude.as_ref().map_or(true, |cur| magnitude > *cur) {
+                if best_magnitude.as_ref().is_none_or(|cur| magnitude > *cur) {
                     best_magnitude = Some(magnitude);
                     entering = Some((*v, dir));
                 }
@@ -431,7 +431,7 @@ impl LraTheory {
                     None => true,
                     Some(cur) => {
                         let better_val = if dir { target < *cur } else { target > *cur };
-                        better_val || (target == *cur && leaving.map_or(false, |l| row_var < l))
+                        better_val || (target == *cur && leaving.is_some_and(|l| row_var < l))
                     }
                 };
 
