@@ -71,6 +71,14 @@ impl LraTheory {
         self.reals.get(var).expect("variable index out of bounds")
     }
 
+    fn row_value(&self, row: &SparseRow) -> InfRational {
+        let mut acc = Self::zero();
+        for (v, c) in row.iter() {
+            acc += &self.reals[*v] * c;
+        }
+        acc
+    }
+
     pub(super) fn get_or_create_slack(&mut self, vars: SparseRow) -> usize {
         if let Some(&slack) = self.lin_to_slack.get(&vars) {
             return slack;
@@ -424,6 +432,128 @@ impl LraTheory {
 
         self.trail_lim.truncate(level);
     }
+
+    /// Optimizes the given objective function, returning the optimal value.
+    pub(super) fn optimize(&mut self, objective: SparseRow, maximize: bool) -> InfRational {
+        let mut obj_row = self.canonicalize(objective);
+
+        loop {
+            let mut entering: Option<(usize, bool)> = None;
+            let mut best_magnitude: Option<RugRational> = None;
+
+            for (v, coeff) in obj_row.iter() {
+                let v = *v;
+                let dir = if maximize {
+                    if coeff.is_positive() {
+                        true
+                    } else if coeff.is_negative() {
+                        false
+                    } else {
+                        continue;
+                    }
+                } else if coeff.is_negative() {
+                    true
+                } else if coeff.is_positive() {
+                    false
+                } else {
+                    continue;
+                };
+
+                let movable = match dir {
+                    true => self.value(v) < self.ub(v),
+                    false => self.value(v) > self.lb(v),
+                };
+                if !movable {
+                    continue;
+                }
+
+                let magnitude = if coeff.is_positive() { coeff.clone() } else { -coeff.clone() };
+                let better = match &best_magnitude {
+                    None => true,
+                    Some(cur) => magnitude > *cur,
+                };
+                if better {
+                    best_magnitude = Some(magnitude);
+                    entering = Some((v, dir));
+                }
+            }
+
+            let Some((entering_var, dir)) = entering else {
+                return self.row_value(&obj_row);
+            };
+
+            let mut best_target: Option<InfRational> = None;
+            let mut leaving: Option<usize> = None;
+            let mut leaving_target: Option<InfRational> = None;
+
+            let self_bound = match dir {
+                true => self.ub(entering_var).clone(),
+                false => self.lb(entering_var).clone(),
+            };
+            if matches!(self_bound.rational_part(), Rational::Finite(_)) {
+                best_target = Some(self_bound.clone());
+                leaving_target = Some(self_bound);
+            }
+
+            let watched_rows: Vec<usize> = self.t_watches[entering_var].iter().copied().collect();
+            for row_var in watched_rows {
+                let coeff = self.tableau[&row_var].get(&entering_var).expect("watched variable must occur in tableau row").clone();
+                let moves_up = match dir {
+                    true => coeff.is_positive(),
+                    false => coeff.is_negative(),
+                };
+                let bound = if moves_up { self.ub(row_var).clone() } else { self.lb(row_var).clone() };
+                if !matches!(bound.rational_part(), Rational::Finite(_)) {
+                    continue;
+                }
+
+                let signed_delta = (bound.clone() - self.value(row_var).clone()) / &coeff;
+                let mut target = self.value(entering_var).clone();
+                target += signed_delta;
+
+                let is_better = match (&best_target, dir) {
+                    (None, _) => true,
+                    (Some(cur), true) => target < *cur || (target == *cur && leaving.map_or(false, |l| row_var < l)),
+                    (Some(cur), false) => target > *cur || (target == *cur && leaving.map_or(false, |l| row_var < l)),
+                };
+                if is_better {
+                    best_target = Some(target);
+                    leaving = Some(row_var);
+                    leaving_target = Some(bound);
+                }
+            }
+
+            match (leaving, leaving_target) {
+                (None, None) => return if maximize { Self::positive_inf() } else { Self::negative_inf() },
+                (None, Some(new_value)) => {
+                    self.update(entering_var, new_value); // bound flip, obj_row resta valida
+                }
+                (Some(leaving_var), Some(new_value)) => {
+                    self.pivot_and_update(entering_var, leaving_var, new_value);
+                    let coeff = obj_row.remove(&entering_var).expect("entering variable must occur in the objective row");
+                    let new_row = &self.tableau[&entering_var];
+                    obj_row.add_scaled_untracked(new_row, &coeff);
+                }
+                (Some(_), None) => unreachable!(),
+            }
+        }
+    }
+
+    /// Canonicalizes a row by eliminating basic variables.
+    fn canonicalize(&self, mut row: SparseRow) -> SparseRow {
+        loop {
+            let Some(&(basic_var, _)) = row.iter().find(|(v, _)| self.is_basic(*v)) else {
+                return row;
+            };
+            let coeff = row.remove(&basic_var).expect("just found in row");
+            let basic_row = &self.tableau[&basic_var];
+            for (v, c) in basic_row.iter() {
+                let mut delta = RugRational::from(0);
+                delta.assign(c * &coeff);
+                row.add_coeff(*v, &delta);
+            }
+        }
+    }
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
@@ -492,7 +622,48 @@ impl SparseRow {
         }
     }
 
-    pub fn add_scaled(&mut self, other: &SparseRow, scale: &RugRational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<RugRational>) {
+    fn add_scaled_untracked(&mut self, other: &SparseRow, scale: &RugRational) {
+        let old_terms = std::mem::take(&mut self.terms);
+        let mut new_terms = Vec::with_capacity(old_terms.len());
+
+        let mut old_iter = old_terms.into_iter().peekable();
+        let mut other_iter = other.terms.iter().peekable();
+
+        while let (Some((v1, _)), Some((v2, _))) = (old_iter.peek(), other_iter.peek()) {
+            if v1 < v2 {
+                new_terms.push(old_iter.next().unwrap());
+            } else if v1 > v2 {
+                let (v2, c2) = other_iter.next().unwrap();
+                let mut delta = RugRational::from(0);
+                delta.assign(c2 * scale);
+                if !delta.is_zero() {
+                    new_terms.push((*v2, delta));
+                }
+            } else {
+                let (v1, mut c1) = old_iter.next().unwrap();
+                let (_, c2) = other_iter.next().unwrap();
+                let mut tmp = RugRational::from(0);
+                tmp.assign(c2 * scale);
+                c1 += tmp;
+                if !c1.is_zero() {
+                    new_terms.push((v1, c1));
+                }
+            }
+        }
+
+        new_terms.extend(old_iter);
+        for (v2, c2) in other_iter {
+            let mut delta = RugRational::from(0);
+            delta.assign(c2 * scale);
+            if !delta.is_zero() {
+                new_terms.push((*v2, delta));
+            }
+        }
+
+        self.terms = new_terms;
+    }
+
+    fn add_scaled(&mut self, other: &SparseRow, scale: &RugRational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<RugRational>) {
         let old_terms = std::mem::take(&mut self.terms);
         let mut new_terms = Vec::with_capacity(old_terms.len());
 
