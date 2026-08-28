@@ -916,4 +916,137 @@ mod tests {
         assert!(lra.t_watches[y].contains(&s1));
         assert!(lra.t_watches[z].contains(&s1));
     }
+
+    #[test]
+    fn test_optimize_maximize_simple_bound() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+
+        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, real(10)).expect("setting upper bound should succeed");
+
+        let obj = build_row(&[(x, 1)]);
+        let result = lra.optimize(obj, true);
+
+        assert_eq!(result, real(10));
+        assert_eq!(lra.value(x), &real(10));
+    }
+
+    #[test]
+    fn test_optimize_minimize_simple_bound() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+
+        lra.set_lb(None, x, real(-5)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, real(10)).expect("setting upper bound should succeed");
+
+        let obj = build_row(&[(x, 1)]);
+        let result = lra.optimize(obj, false);
+
+        assert_eq!(result, real(-5));
+        assert_eq!(lra.value(x), &real(-5));
+    }
+
+    #[test]
+    fn test_optimize_unbounded() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+
+        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        // nessun upper bound: resta +inf di default
+
+        let obj = build_row(&[(x, 1)]);
+        let result = lra.optimize(obj, true);
+
+        assert_eq!(result, LraTheory::positive_inf());
+    }
+
+    #[test]
+    fn test_optimize_requires_pivot() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+        let y = lra.mk_real(); // 1
+        let s = lra.mk_real(); // 2, basic: s = x + y
+
+        add_test_row(&mut lra, s, &[(x, 1), (y, 1)]);
+
+        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, real(100)).expect("setting upper bound should succeed");
+        lra.set_lb(None, y, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, y, real(100)).expect("setting upper bound should succeed");
+        lra.set_lb(None, s, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, s, real(5)).expect("setting upper bound should succeed");
+
+        let obj = build_row(&[(x, 1)]);
+        let result = lra.optimize(obj, true);
+
+        assert_eq!(result, real(5));
+        assert_eq!(lra.value(x), &real(5));
+        assert_eq!(lra.value(s), &real(5));
+        assert_eq!(lra.value(y), &real(0), "y should have absorbed the delta to maintain s = x + y");
+        assert!(lra.is_basic(x), "x should be basic after pivoting");
+        assert!(!lra.is_basic(s), "s should no longer be basic after pivoting");
+    }
+
+    #[test]
+    fn test_optimize_objective_on_basic_variable() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+        let y = lra.mk_real(); // 1
+        let s = lra.mk_real(); // 2, basic: s = x + 2y
+
+        add_test_row(&mut lra, s, &[(x, 1), (y, 2)]);
+
+        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, real(3)).expect("setting upper bound should succeed");
+        lra.set_lb(None, y, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, y, real(3)).expect("setting upper bound should succeed");
+
+        let obj = build_row(&[(s, 1)]);
+        let result = lra.optimize(obj, true);
+
+        assert_eq!(result, real(9)); // x=3, y=3 => s = 3 + 2*3 = 9
+        assert_eq!(lra.value(x), &real(3));
+        assert_eq!(lra.value(y), &real(3));
+    }
+
+    #[test]
+    fn test_optimize_degenerate_tie_picks_lowest_index() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+        let s1 = lra.mk_real(); // 1, basic: s1 = x
+        let s2 = lra.mk_real(); // 2, basic: s2 = x
+
+        add_test_row(&mut lra, s1, &[(x, 1)]);
+        add_test_row(&mut lra, s2, &[(x, 1)]);
+
+        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, s1, real(5)).expect("setting upper bound should succeed");
+        lra.set_ub(None, s2, real(5)).expect("setting upper bound should succeed");
+
+        let obj = build_row(&[(x, 1)]);
+        let result = lra.optimize(obj, true);
+
+        assert_eq!(result, real(5));
+        assert_eq!(lra.value(x), &real(5));
+        assert_eq!(lra.value(s1), &real(5));
+        assert_eq!(lra.value(s2), &real(5));
+    }
+
+    #[test]
+    fn test_canonicalize_substitutes_basic_variables() {
+        let mut lra = LraTheory::new();
+        let x = lra.mk_real(); // 0
+        let y = lra.mk_real(); // 1
+        let s = lra.mk_real(); // 2, basic: s = x + 2y
+
+        add_test_row(&mut lra, s, &[(x, 1), (y, 2)]);
+
+        let row = build_row(&[(s, 3)]);
+        let canon = lra.canonicalize(row);
+
+        assert_eq!(canon.get(&s), None, "s should be eliminated from the canonicalized row");
+        assert_eq!(canon.get(&x), Some(&RugRational::from(3)));
+        assert_eq!(canon.get(&y), Some(&RugRational::from(6)));
+    }
 }
