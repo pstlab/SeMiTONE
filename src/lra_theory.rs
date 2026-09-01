@@ -1,4 +1,5 @@
 use crate::{
+    out_of_bounds,
     rational::{InfRational, Rational},
     sat_solver::Lit,
 };
@@ -65,8 +66,9 @@ impl LraTheory {
         InfRational::new(Rational::PositiveInf, RugRational::from(0))
     }
 
+    #[inline]
     pub(super) fn value(&self, var: usize) -> &InfRational {
-        self.reals.get(var).expect("variable index out of bounds")
+        self.reals.get(var).unwrap_or_else(|| out_of_bounds(var))
     }
 
     fn row_value(&self, row: &SparseRow) -> InfRational {
@@ -93,12 +95,14 @@ impl LraTheory {
         slack
     }
 
+    #[inline]
     pub(super) fn lb(&self, var: usize) -> &InfRational {
-        &self.lbs.get(var).expect("variable index out of bounds").1
+        &self.lbs.get(var).unwrap_or_else(|| out_of_bounds(var)).1
     }
 
+    #[inline]
     pub(super) fn ub(&self, var: usize) -> &InfRational {
-        &self.ubs.get(var).expect("variable index out of bounds").1
+        &self.ubs.get(var).unwrap_or_else(|| out_of_bounds(var)).1
     }
 
     pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: usize, new_lb: InfRational) -> Result<bool, Vec<Lit>> {

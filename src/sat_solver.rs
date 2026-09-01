@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, fmt, mem, ops};
 use tracing::trace;
 
+use crate::out_of_bounds;
+
 pub(super) struct SatSolver {
     pub(super) assigns: Vec<Option<bool>>, // Current assignments of boolean variables (None = unassigned, Some(true/false) = assigned)
     pub(super) clauses: Vec<Clause>,       // List of clauses in the solver
@@ -284,8 +286,9 @@ impl SatSolver {
         Ok(())
     }
 
+    #[inline]
     pub(super) fn value(&self, var: usize) -> &Option<bool> {
-        self.assigns.get(var).expect("Variable index out of bounds")
+        self.assigns.get(var).unwrap_or_else(|| out_of_bounds(var))
     }
 
     fn lit_value(&self, lit: &Lit) -> Option<bool> {
@@ -293,8 +296,9 @@ impl SatSolver {
         if lit.sign() { val.map(|v| !v) } else { *val }
     }
 
+    #[inline]
     pub(super) fn level(&self, var: usize) -> Option<usize> {
-        self.level.get(var).copied().expect("Variable index out of bounds")
+        self.level.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
     }
 
     pub(super) fn decision_level(&self) -> usize {

@@ -785,6 +785,12 @@ impl SeMiTONE {
     }
 }
 
+#[cold]
+#[inline(never)]
+pub(crate) fn out_of_bounds(var: usize) -> ! {
+    panic!("variable index out of bounds: {}", var);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
