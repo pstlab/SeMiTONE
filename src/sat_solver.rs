@@ -285,12 +285,8 @@ impl SatSolver {
 
                 if self.lit_value(simplified_lits[0]) == Some(false) {
                     return Err(simplified_lits);
-                } else if self.lit_value(simplified_lits[1]) == Some(false) {
-                    if self.lit_value(simplified_lits[0]) == None {
-                        if !self.enqueue(simplified_lits[0], Some(clause_index)) {
-                            return Err(simplified_lits);
-                        }
-                    }
+                } else if self.lit_value(simplified_lits[1]) == Some(false) && self.lit_value(simplified_lits[0]).is_none() && !self.enqueue(simplified_lits[0], Some(clause_index)) {
+                    return Err(simplified_lits);
                 }
             }
         }
