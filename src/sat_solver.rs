@@ -68,7 +68,7 @@ impl SatSolver {
     }
 
     pub(super) fn enqueue_decision(&mut self, lit: Lit) -> bool {
-        assert!(self.lit_value(&lit).is_none(), "Cannot decide on an already assigned literal: {}", lit);
+        assert!(self.lit_value(lit).is_none(), "Cannot decide on an already assigned literal: {}", lit);
         self.enqueue(lit, None)
     }
 
@@ -85,7 +85,7 @@ impl SatSolver {
                 }
 
                 // Check if clause is already satisfied
-                if self.lit_value(&self.clauses[clause_idx].lits[0]) == Some(true) {
+                if self.lit_value(self.clauses[clause_idx].lits[0]) == Some(true) {
                     self.watches[falsified_index].push(clause_idx);
                     continue;
                 }
@@ -94,7 +94,7 @@ impl SatSolver {
                 let mut found_replacement = false;
                 for j in 2..self.clauses[clause_idx].lits.len() {
                     let next_lit = self.clauses[clause_idx].lits[j];
-                    if self.lit_value(&next_lit) != Some(false) {
+                    if self.lit_value(next_lit) != Some(false) {
                         self.clauses[clause_idx].lits.swap(1, j);
                         self.watches[next_lit.index()].push(clause_idx);
                         found_replacement = true;
@@ -221,7 +221,7 @@ impl SatSolver {
 
     fn enqueue(&mut self, lit: Lit, reason: Option<usize>) -> bool {
         trace!("Enqueue {}{}", lit, reason.map_or("".to_string(), |r| format!(" (reason: {})", r)));
-        match self.lit_value(&lit) {
+        match self.lit_value(lit) {
             None => {
                 self.assigns[lit.var()] = if lit.sign() { Some(false) } else { Some(true) };
                 self.level[lit.var()] = Some(self.decision_level());
@@ -238,7 +238,7 @@ impl SatSolver {
         let mut simplified_lits = Vec::new();
 
         for lit in lits {
-            match self.lit_value(&lit) {
+            match self.lit_value(lit) {
                 Some(true) if self.level(lit.var()) == Some(0) => {
                     return Ok(());
                 }
@@ -269,7 +269,11 @@ impl SatSolver {
             _ => {
                 let clause_index = self.clauses.len();
 
-                simplified_lits.sort_by_key(|l| self.lit_value(l).is_some());
+                simplified_lits.sort_by_key(|&l| match self.lit_value(l) {
+                    Some(true) => 0,
+                    None => 1,
+                    Some(false) => 2,
+                });
 
                 let clause = Clause { lits: simplified_lits.clone() };
                 trace!("Adding clause {}: {}", clause_index, clause);
@@ -278,8 +282,15 @@ impl SatSolver {
                     self.watches[lit.index()].push(clause_index);
                 }
                 self.clauses.push(clause);
-                if self.lit_value(&simplified_lits[0]) == Some(false) || (self.lit_value(&simplified_lits[1]) == Some(false) && !self.enqueue(simplified_lits[0], Some(clause_index))) {
+
+                if self.lit_value(simplified_lits[0]) == Some(false) {
                     return Err(simplified_lits);
+                } else if self.lit_value(simplified_lits[1]) == Some(false) {
+                    if self.lit_value(simplified_lits[0]) == None {
+                        if !self.enqueue(simplified_lits[0], Some(clause_index)) {
+                            return Err(simplified_lits);
+                        }
+                    }
                 }
             }
         }
@@ -291,9 +302,10 @@ impl SatSolver {
         self.assigns.get(var).unwrap_or_else(|| out_of_bounds(var))
     }
 
-    fn lit_value(&self, lit: &Lit) -> Option<bool> {
-        let val = self.value(lit.var());
-        if lit.sign() { val.map(|v| !v) } else { *val }
+    #[inline]
+    pub(super) fn lit_value(&self, lit: Lit) -> Option<bool> {
+        let val = *self.value(lit.var());
+        if lit.sign() { val.map(|v| !v) } else { val }
     }
 
     #[inline]
@@ -360,7 +372,7 @@ impl Lit {
     }
 
     /// Compact integer index suitable for watch-list indexing (MiniSat's toInt).
-    pub fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         self.x
     }
 }

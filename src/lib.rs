@@ -634,6 +634,11 @@ impl SeMiTONE {
         Ok(())
     }
 
+    /// Returns the assigned value of a literal in the current trail.
+    pub fn get_lit_val(&self, lit: Lit) -> Option<bool> {
+        self.sat_solver.lit_value(lit)
+    }
+
     /// Returns the assigned value of a Boolean expression when it is fully determined.
     pub fn get_bool_val(&self, expr: &BoolExpr) -> Option<bool> {
         match expr {
