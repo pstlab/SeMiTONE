@@ -24,9 +24,10 @@ use crate::{
     lra_theory::{LraTheory, SparseRow},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
-    sat_solver::{Lit, SatSolver},
+    sat_solver::SatSolver,
 };
 use rug::Assign;
+pub use sat_solver::Lit;
 
 /// Main solver entry point for propositional, linear arithmetic, and enum constraints.
 ///
@@ -680,9 +681,7 @@ impl SeMiTONE {
             ArithExpr::Add(terms) => {
                 let mut sum = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 for term in terms {
-                    {
-                        sum += self.get_arith_val(term)?;
-                    }
+                    sum += self.get_arith_val(term)?;
                 }
                 Some(sum)
             }
