@@ -61,6 +61,11 @@ impl SeMiTONE {
         }
     }
 
+    /// Allocates a new SAT literal.
+    pub fn new_lit(&mut self) -> Lit {
+        Lit::new(self.sat_solver.mk_var(), false)
+    }
+
     /// Allocates a new Boolean variable.
     pub fn new_bool(&mut self) -> BoolExpr {
         BoolExpr::Var(self.sat_solver.mk_var())
