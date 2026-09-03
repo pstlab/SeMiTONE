@@ -211,7 +211,15 @@ impl SeMiTONE {
         }
     }
 
-    fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
+    /// Encodes a Boolean expression into an equivalent SAT literal.
+    ///
+    /// The returned literal is a SAT variable or proxy that is logically
+    /// equivalent to `expr`: it is satisfied exactly when the Boolean expression
+    /// evaluates to true in the current theory encoding. Compound boolean
+    /// operators create auxiliary proxy variables and CNF clauses that preserve
+    /// this equivalence, while arithmetic and enum comparisons are translated via
+    /// their theory-specific proxy constraints.
+    pub fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
         match expr {
             BoolExpr::True => self.sat_solver.true_lit(),
             BoolExpr::False => !self.sat_solver.true_lit(),
