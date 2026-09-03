@@ -222,8 +222,8 @@ impl SeMiTONE {
     /// their theory-specific proxy constraints.
     pub fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
         match expr {
-            BoolExpr::True => self.sat_solver.true_lit(),
-            BoolExpr::False => !self.sat_solver.true_lit(),
+            BoolExpr::True => Lit::TRUE,
+            BoolExpr::False => Lit::FALSE,
             BoolExpr::Var(v) => Lit::new(*v, false),
             BoolExpr::Not(inner) => match inner.as_ref() {
                 BoolExpr::Lt(a1, a2) => self.mk_ge(a1, a2, false),
@@ -303,15 +303,15 @@ impl SeMiTONE {
         match (e1, e2) {
             (EnumExpr::Const(c1), EnumExpr::Const(c2)) => {
                 if c1 == c2 {
-                    self.sat_solver.true_lit()
+                    Lit::TRUE
                 } else {
-                    self.sat_solver.false_lit()
+                    Lit::FALSE
                 }
             }
             (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => self.get_or_create_proxy(TheoryConstraint::EnumEq(*v, *c)),
             (EnumExpr::Var(v1), EnumExpr::Var(v2)) => {
                 if v1 == v2 {
-                    return self.sat_solver.true_lit();
+                    return Lit::TRUE;
                 }
 
                 let domain1 = self.enum_theory.initial_domains[*v1].clone();
@@ -319,7 +319,7 @@ impl SeMiTONE {
                 let common: Vec<i32> = domain1.intersection(&domain2).copied().collect();
 
                 if common.is_empty() {
-                    return self.sat_solver.false_lit();
+                    return Lit::FALSE;
                 }
 
                 let mut lits = Vec::with_capacity(common.len());
@@ -359,9 +359,9 @@ impl SeMiTONE {
         match vars.len() {
             0 => {
                 if if strict { const_term.is_negative() } else { const_term.is_negative() || const_term.is_zero() } {
-                    self.sat_solver.true_lit()
+                    Lit::TRUE
                 } else {
-                    self.sat_solver.false_lit()
+                    Lit::FALSE
                 }
             }
             1 => {
@@ -380,7 +380,7 @@ impl SeMiTONE {
 
     fn mk_arith_eq(&mut self, e1: &ArithExpr, e2: &ArithExpr) -> Lit {
         if e1 == e2 {
-            return self.sat_solver.true_lit();
+            return Lit::TRUE;
         }
 
         let le_lit = self.mk_le(e1, e2, false);
@@ -405,9 +405,9 @@ impl SeMiTONE {
         match vars.len() {
             0 => {
                 if if strict { const_term.is_positive() } else { const_term.is_positive() || const_term.is_zero() } {
-                    self.sat_solver.true_lit()
+                    Lit::TRUE
                 } else {
-                    self.sat_solver.false_lit()
+                    Lit::FALSE
                 }
             }
             1 => {
@@ -674,7 +674,80 @@ impl SeMiTONE {
                 }
                 result
             }
-            _ => None,
+            BoolExpr::Lt(e1, e2) => {
+                let (lb1, ub1) = self.get_arith_bounds(e1)?;
+                let (lb2, ub2) = self.get_arith_bounds(e2)?;
+                if ub1 < lb2 {
+                    Some(true)
+                } else if lb1 >= ub2 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::Le(e1, e2) => {
+                let (lb1, ub1) = self.get_arith_bounds(e1)?;
+                let (lb2, ub2) = self.get_arith_bounds(e2)?;
+                if ub1 <= lb2 {
+                    Some(true)
+                } else if lb1 > ub2 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::Ge(e1, e2) => {
+                let (lb1, ub1) = self.get_arith_bounds(e1)?;
+                let (lb2, ub2) = self.get_arith_bounds(e2)?;
+                if lb1 >= ub2 {
+                    Some(true)
+                } else if ub1 < lb2 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::Gt(e1, e2) => {
+                let (lb1, ub1) = self.get_arith_bounds(e1)?;
+                let (lb2, ub2) = self.get_arith_bounds(e2)?;
+                if lb1 > ub2 {
+                    Some(true)
+                } else if ub1 <= lb2 {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::Eq(e1, e2) => match (e1.as_ref(), e2.as_ref()) {
+                (Expr::Arith(a1), Expr::Arith(a2)) => {
+                    let (lb1, ub1) = self.get_arith_bounds(a1)?;
+                    let (lb2, ub2) = self.get_arith_bounds(a2)?;
+                    if ub1 < lb2 || ub2 < lb1 {
+                        Some(false)
+                    } else if lb1 == ub1 && lb2 == ub2 && lb1 == lb2 {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                }
+                (Expr::Bool(b1), Expr::Bool(b2)) => {
+                    let val1 = self.get_bool_val(b1);
+                    let val2 = self.get_bool_val(b2);
+                    match (val1, val2) {
+                        (Some(v1), Some(v2)) => Some(v1 == v2),
+                        _ => None,
+                    }
+                }
+                (Expr::Enum(e1), Expr::Enum(e2)) => {
+                    let val1 = self.get_enum_val(e1);
+                    let val2 = self.get_enum_val(e2);
+                    match (val1, val2) {
+                        (Some(v1), Some(v2)) => Some(v1 == v2),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
         }
     }
 
@@ -691,6 +764,32 @@ impl SeMiTONE {
                 Some(sum)
             }
             ArithExpr::Neg(term) => self.get_arith_val(term).map(|val| -val),
+            _ => None,
+        }
+    }
+
+    /// Returns the current lower and upper bounds of an arithmetic expression when they are fixed by the model.
+    pub fn get_arith_bounds(&self, expr: &ArithExpr) -> Option<(InfRational, InfRational)> {
+        match expr {
+            ArithExpr::Const(c) => {
+                let val = InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0));
+                Some((val.clone(), val))
+            }
+            ArithExpr::RealVar(v) | ArithExpr::IntVar(v) => Some((self.lra_theory.lb(*v).clone(), self.lra_theory.ub(*v).clone())),
+            ArithExpr::Add(terms) => {
+                let mut sum_lb = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
+                let mut sum_ub = sum_lb.clone();
+                for term in terms {
+                    let (lb, ub) = self.get_arith_bounds(term)?;
+                    sum_lb += lb;
+                    sum_ub += ub;
+                }
+                Some((sum_lb, sum_ub))
+            }
+            ArithExpr::Neg(term) => {
+                let (lb, ub) = self.get_arith_bounds(term)?;
+                Some((-ub, -lb))
+            }
             _ => None,
         }
     }
