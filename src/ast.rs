@@ -154,6 +154,12 @@ impl ops::BitOr<&BoolExpr> for &BoolExpr {
     }
 }
 
+impl AsRef<BoolExpr> for BoolExpr {
+    fn as_ref(&self) -> &BoolExpr {
+        self
+    }
+}
+
 impl fmt::Display for BoolExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -203,6 +209,12 @@ impl EnumExpr {
     /// Builds an equality constraint between two enum expressions.
     pub fn eq(&self, other: impl Into<EnumExpr>) -> BoolExpr {
         BoolExpr::Eq(Box::new(Expr::Enum(self.clone())), Box::new(Expr::Enum(other.into())))
+    }
+}
+
+impl AsRef<EnumExpr> for EnumExpr {
+    fn as_ref(&self) -> &EnumExpr {
+        self
     }
 }
 
@@ -388,6 +400,12 @@ impl ops::Neg for &ArithExpr {
 
     fn neg(self) -> Self::Output {
         -(*self).clone()
+    }
+}
+
+impl AsRef<ArithExpr> for ArithExpr {
+    fn as_ref(&self) -> &ArithExpr {
+        self
     }
 }
 

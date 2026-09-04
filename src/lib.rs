@@ -112,8 +112,8 @@ impl SeMiTONE {
     ///
     /// Note that `true` does not imply global feasibility: call [`SeMiTONE::propagate`]
     /// to detect conflicts that emerge after propagation through SAT/theory state.
-    pub fn assert(&mut self, expr: &BoolExpr) -> bool {
-        self.assert_internal(expr, true)
+    pub fn assert(&mut self, expr: impl AsRef<BoolExpr>) -> bool {
+        self.assert_internal(expr.as_ref(), true)
     }
 
     fn assert_internal(&mut self, expr: &BoolExpr, polarity: bool) -> bool {
@@ -217,15 +217,18 @@ impl SeMiTONE {
         }
     }
 
-    /// Encodes a Boolean expression into an equivalent SAT literal.
+    /// Encodes a Boolean expression and returns its equivalent SAT literal.
     ///
-    /// The returned literal is a SAT variable or proxy that is logically
-    /// equivalent to `expr`: it is satisfied exactly when the Boolean expression
-    /// evaluates to true in the current theory encoding. Compound boolean
-    /// operators create auxiliary proxy variables and CNF clauses that preserve
-    /// this equivalence, while arithmetic and enum comparisons are translated via
-    /// their theory-specific proxy constraints.
-    pub fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
+    /// The returned literal may refer to an internal proxy variable. Encoding
+    /// a compound expression can therefore add auxiliary variables and
+    /// clauses to the solver. The literal preserves the expression's polarity
+    /// and can be inspected with [`SeMiTONE::get_lit_val`] or used with
+    /// [`SeMiTONE::decide`]. This method does not assert the expression.
+    pub fn track_expr(&mut self, expr: impl AsRef<BoolExpr>) -> Lit {
+        self.encode_bool(expr.as_ref())
+    }
+
+    fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
         match expr {
             BoolExpr::True => Lit::TRUE,
             BoolExpr::False => Lit::FALSE,
@@ -539,15 +542,13 @@ impl SeMiTONE {
     ///
     /// Convenience wrapper around [`SeMiTONE::decide`]. Returns `false` if the
     /// decision cannot be enqueued consistently.
-    pub fn decide_enum(&mut self, expr: &EnumExpr, value: i32) -> bool {
-        let eq_expr = TheoryConstraint::EnumEq(
-            match expr {
-                EnumExpr::Var(v) => *v,
-                EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
-            },
-            value,
-        );
-        let lit = self.get_or_create_proxy(eq_expr);
+    pub fn decide_enum(&mut self, expr: impl AsRef<EnumExpr>, value: i32) -> bool {
+        let var = match expr.as_ref() {
+            EnumExpr::Var(v) => *v,
+            EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
+        };
+
+        let lit = self.get_or_create_proxy(TheoryConstraint::EnumEq(var, value));
         self.decide(lit)
     }
 
@@ -923,7 +924,7 @@ mod tests {
         // With ¬A, clause (A ∨ B) forces B; then B forces both C and ¬C.
         let expr = (&a | &b) & (&!&b | &c) & (!&b | !&c) & !&a;
 
-        let _ = solver.assert(&expr);
+        let _ = solver.assert(expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
@@ -935,7 +936,7 @@ mod tests {
         // x > 10 ∧ x < 5
         let expr = (x.clone().gt(10)) & (x.lt(5));
 
-        let result = solver.assert(&expr);
+        let result = solver.assert(expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
     }
 
@@ -947,7 +948,7 @@ mod tests {
         // x == 5 ∧ x > 6
         let expr = (x.clone().eq(5)) & (x.gt(6));
 
-        let result = solver.assert(&expr);
+        let result = solver.assert(expr);
         assert!(!result, "The solver should detect that the system is unsatisfiable");
     }
 
@@ -966,7 +967,7 @@ mod tests {
 
         let expr = eq_expr & gt_x & gt_y;
 
-        let _ = solver.assert(&expr);
+        let _ = solver.assert(expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
@@ -974,18 +975,18 @@ mod tests {
     fn test_constant_arithmetic_evaluations() {
         let mut solver = SeMiTONE::new();
 
-        assert!(solver.assert(&ArithExpr::from(5).lt(10)));
-        assert!(solver.assert(&ArithExpr::from(5).le(5)));
-        assert!(solver.assert(&ArithExpr::from(10).ge(5)));
-        assert!(solver.assert(&ArithExpr::from(10).gt(5)));
+        assert!(solver.assert(ArithExpr::from(5).lt(10)));
+        assert!(solver.assert(ArithExpr::from(5).le(5)));
+        assert!(solver.assert(ArithExpr::from(10).ge(5)));
+        assert!(solver.assert(ArithExpr::from(10).gt(5)));
 
-        assert!(!solver.assert(&ArithExpr::from(10).lt(5)));
-        assert!(!solver.assert(&ArithExpr::from(10).le(5)));
-        assert!(!solver.assert(&ArithExpr::from(5).ge(10)));
-        assert!(!solver.assert(&ArithExpr::from(5).gt(10)));
+        assert!(!solver.assert(ArithExpr::from(10).lt(5)));
+        assert!(!solver.assert(ArithExpr::from(10).le(5)));
+        assert!(!solver.assert(ArithExpr::from(5).ge(10)));
+        assert!(!solver.assert(ArithExpr::from(5).gt(10)));
 
-        assert!(solver.assert(&!ArithExpr::from(10).lt(5)));
-        assert!(!solver.assert(&!ArithExpr::from(5).lt(10)));
+        assert!(solver.assert(!ArithExpr::from(10).lt(5)));
+        assert!(!solver.assert(!ArithExpr::from(5).lt(10)));
     }
 
     #[test]
@@ -994,23 +995,23 @@ mod tests {
         let x = solver.new_real();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().lt(5)));
-        assert!(!solver.assert(&x.clone().lt(4)));
+        assert!(solver.assert(!x.clone().lt(5)));
+        assert!(!solver.assert(x.clone().lt(4)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().le(5)));
-        assert!(!solver.assert(&x.clone().le(5)));
+        assert!(solver.assert(!x.clone().le(5)));
+        assert!(!solver.assert(x.clone().le(5)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().ge(5)));
-        assert!(!solver.assert(&x.clone().ge(5)));
+        assert!(solver.assert(!x.clone().ge(5)));
+        assert!(!solver.assert(x.clone().ge(5)));
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(&!x.clone().gt(5)));
-        assert!(!solver.assert(&x.clone().gt(5)));
+        assert!(solver.assert(!x.clone().gt(5)));
+        assert!(!solver.assert(x.clone().gt(5)));
         solver.pop();
     }
 
@@ -1023,7 +1024,7 @@ mod tests {
 
         let bad_eq = BoolExpr::Eq(Box::new(Expr::Bool(a)), Box::new(Expr::Arith(x)));
 
-        let _ = solver.assert(&bad_eq);
+        let _ = solver.assert(bad_eq);
     }
 
     #[test]
@@ -1033,7 +1034,7 @@ mod tests {
 
         let expr = e.eq(3);
 
-        let _ = solver.assert(&expr);
+        let _ = solver.assert(expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
     }
 
@@ -1045,7 +1046,7 @@ mod tests {
         // (e != 1) AND (e != 2)
         let expr = !(e.clone().eq(1)) & !(e.clone().eq(2));
 
-        let _ = solver.assert(&expr);
+        let _ = solver.assert(expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
     }
 }

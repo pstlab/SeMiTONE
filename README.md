@@ -56,8 +56,7 @@ let gt_expr = x.gt(6);
 
 // 1) Assert constraints into the network.
 //    `assert` returns false only for immediate/trivial inconsistencies.
-let system = eq_expr & gt_expr;
-if !solver.assert(&system) {
+if !solver.assert(eq_expr & gt_expr) {
   println!("Trivial inconsistency detected during assert.");
 } else {
   // 2) Propagate current consequences.
