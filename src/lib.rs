@@ -513,7 +513,7 @@ impl SeMiTONE {
                 }
                 let (first, second) = (&terms[0], &terms[1]);
 
-                // Ricorsione intelligente: accettiamo (Costante * SottoEspressione)
+                // Smart recursion: accept (Constant * SubExpression)
                 match (first, second) {
                     (ArithExpr::Const(c), sub_expr) | (sub_expr, ArithExpr::Const(c)) => {
                         let mut new_scale = rug::Rational::new();
@@ -526,7 +526,7 @@ impl SeMiTONE {
                 }
             }
             ArithExpr::Div(numerator, denominator) => {
-                // Il denominatore DEVE essere una costante per preservare la linearità
+                // The denominator MUST be a constant to preserve linearity
                 if let ArithExpr::Const(c) = &**denominator {
                     if c.is_zero() {
                         panic!("Division by zero detected in AST");
@@ -670,8 +670,8 @@ impl SeMiTONE {
                     (TheoryConstraint::LraUb(var, bound), true) => self.lra_theory.set_lb(Some(lit), *var, InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_negative() { rug::Rational::from(0) } else { rug::Rational::from(1) })),
                     (TheoryConstraint::EnumEq(var, val), false) => self.enum_theory.set_eq(Some(lit), *var, *val),
                     (TheoryConstraint::EnumEq(var, val), true) => self.enum_theory.set_neq(Some(lit), *var, *val),
-                    (TheoryConstraint::DlLeq(from, to, bound), true) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect()),
-                    (TheoryConstraint::DlLeq(from, to, bound), false) => {
+                    (TheoryConstraint::DlLeq(from, to, bound), false) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect()),
+                    (TheoryConstraint::DlLeq(from, to, bound), true) => {
                         let rat_part = bound.rational_part().clone();
                         let neg_rat = match rat_part {
                             Rational::Finite(val) => Rational::Finite(-val),
@@ -1191,5 +1191,119 @@ mod tests {
 
         let _ = solver.assert(expr);
         assert!(solver.propagate().is_err(), "The solver should detect that the enum variable cannot take a value outside its domain");
+    }
+
+    #[test]
+    fn test_dl_chain_upper_bounds() {
+        let mut solver = SeMiTONE::new();
+        let zero = solver.new_time_point(); // first time point created = reference 0 in the DL theory
+        let t1 = solver.new_time_point();
+        let t2 = solver.new_time_point();
+
+        let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(10))); // t1 - zero <= 10
+        let _ = solver.assert(BoolExpr::DlLe(t1, t2, rug::Rational::from(5))); // t2 - t1 <= 5
+
+        assert!(solver.propagate().is_ok());
+
+        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(10));
+        assert_eq!(solver.get_time_bounds(t2).1, InfRational::from(15));
+        assert_eq!(solver.get_time_bounds(t1).0, InfRational::from(Rational::NegativeInf), "no lower bound imposed");
+    }
+
+    #[test]
+    fn test_dl_lower_and_upper_bound_interval() {
+        let mut solver = SeMiTONE::new();
+        let zero = solver.new_time_point();
+        let t1 = solver.new_time_point();
+
+        let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(8))); // t1 <= 8
+        let _ = solver.assert(BoolExpr::DlGe(zero, t1, rug::Rational::from(3))); // t1 >= 3
+
+        assert!(solver.propagate().is_ok());
+        assert_eq!(solver.get_time_bounds(t1), (InfRational::from(3), InfRational::from(8)));
+    }
+
+    #[test]
+    fn test_dl_eq_pins_value() {
+        let mut solver = SeMiTONE::new();
+        let zero = solver.new_time_point();
+        let t1 = solver.new_time_point();
+
+        let _ = solver.assert(BoolExpr::DlEq(zero, t1, rug::Rational::from(7)));
+        assert!(solver.propagate().is_ok());
+
+        assert_eq!(solver.get_time_bounds(t1), (InfRational::from(7), InfRational::from(7)));
+    }
+
+    #[test]
+    fn test_dl_negative_cycle_conflict() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_time_point();
+        let b = solver.new_time_point();
+
+        // b - a <= 5 and b - a >= 10 (via a - b <= -10): irreconcilable
+        let _ = solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(5)));
+        let _ = solver.assert(BoolExpr::DlLe(b, a, rug::Rational::from(-10)));
+
+        assert!(solver.propagate().is_err(), "the negative cycle must produce a conflict");
+    }
+
+    #[test]
+    fn test_dl_strict_boundary_conflict() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_time_point();
+        let b = solver.new_time_point();
+
+        // b - a <= 0 (non-strict) and a - b < 0, i.e. b - a > 0 (strict):
+        // the weights sum to 0 but the conflict must be detected via the infinitesimal trick
+        let _ = solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(0)));
+        let _ = solver.assert(BoolExpr::DlLt(b, a, rug::Rational::from(0)));
+
+        assert!(solver.propagate().is_err());
+    }
+
+    #[test]
+    fn test_dl_non_strict_boundary_is_sat() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_time_point();
+        let b = solver.new_time_point();
+
+        let _ = solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(0)));
+        let _ = solver.assert(BoolExpr::DlLe(b, a, rug::Rational::from(0)));
+
+        assert!(solver.propagate().is_ok());
+        assert_eq!(solver.get_time_bounds(b), solver.get_time_bounds(a), "b == a == 0");
+    }
+
+    #[test]
+    fn test_dl_backtracking_via_push_pop() {
+        let mut solver = SeMiTONE::new();
+        let zero = solver.new_time_point();
+        let t1 = solver.new_time_point();
+
+        solver.push();
+        let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(4)));
+        assert!(solver.propagate().is_ok());
+        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(4));
+        solver.pop();
+
+        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(Rational::PositiveInf), "the constraint must disappear after the pop");
+    }
+
+    #[test]
+    fn test_dl_negated_le_forces_strict_gt() {
+        // `assert(!expr)` goes through the catch-all branch of `assert_internal`, which negates
+        // at the SAT level the literal already registered for DlLe (it does not call mk_dl_ge).
+        // This exercises the `(DlLeq(..), false)` branch of `propagate()`.
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_time_point();
+        let b = solver.new_time_point();
+
+        let neg_le = BoolExpr::Not(Box::new(BoolExpr::DlLe(a, b, rug::Rational::from(4))));
+        let _ = solver.assert(neg_le);
+        assert!(solver.propagate().is_ok());
+
+        let (lb_b, _) = solver.get_time_bounds(b);
+        assert!(lb_b > InfRational::from(4), "!(b - a <= 4) must imply b - a > 4, found lb(b) = {:?}", lb_b);
     }
 }
