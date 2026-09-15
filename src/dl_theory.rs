@@ -2,6 +2,7 @@ use crate::{
     Lit,
     rational::{InfRational, Rational},
 };
+use std::collections::VecDeque;
 
 #[derive(Clone, Debug)]
 struct DlEdge {
@@ -18,7 +19,7 @@ pub(super) struct DlTheory {
     distances: Vec<InfRational>,
     parents: Vec<Option<(usize, Lit)>>,
 
-    work_queue: std::collections::VecDeque<usize>,
+    work_queue: VecDeque<usize>,
     in_queue: Vec<bool>,
     trail_lim: Vec<usize>,
 }
@@ -30,7 +31,7 @@ impl DlTheory {
             history: Vec::new(),
             distances: Vec::new(),
             parents: Vec::new(),
-            work_queue: std::collections::VecDeque::new(),
+            work_queue: VecDeque::new(),
             in_queue: Vec::new(),
             trail_lim: Vec::new(),
         }
@@ -78,7 +79,7 @@ impl DlTheory {
 
         let mut dists = vec![InfRational::from(Rational::PositiveInf); n];
         let mut in_queue = vec![false; n];
-        let mut queue = std::collections::VecDeque::with_capacity(n);
+        let mut queue = VecDeque::with_capacity(n);
 
         dists[source] = InfRational::from(0);
         queue.push_back(source);
@@ -116,7 +117,7 @@ impl DlTheory {
 
         let mut dists = vec![InfRational::from(Rational::PositiveInf); n];
         let mut in_queue = vec![false; n];
-        let mut queue = std::collections::VecDeque::with_capacity(n);
+        let mut queue = VecDeque::with_capacity(n);
 
         dists[source] = InfRational::from(0);
         queue.push_back(source);

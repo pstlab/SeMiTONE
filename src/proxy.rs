@@ -31,4 +31,5 @@ pub(super) enum TheoryConstraint {
     LraUb(usize, InfRational),
     EnumEq(usize, i32),
     DlLeq(usize, usize, InfRational),
+    EufEq(usize, usize),
 }

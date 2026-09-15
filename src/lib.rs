@@ -10,6 +10,7 @@
 pub mod ast;
 mod dl_theory;
 mod enum_theory;
+mod euf_theory;
 mod lra_theory;
 #[cfg(feature = "parser")]
 pub mod parser;
@@ -20,9 +21,10 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, EnumExpr, Expr},
+    ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, Expr},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
+    euf_theory::{EufTheory, Term},
     lra_theory::{LraTheory, SparseRow},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
@@ -41,6 +43,7 @@ pub struct SeMiTONE {
     lra_theory: LraTheory,
     enum_theory: EnumTheory,
     dl_theory: DlTheory,
+    euf_theory: EufTheory,
     notified_len: usize,
     user_scopes: Vec<(usize, usize)>,
 }
@@ -60,6 +63,7 @@ impl SeMiTONE {
             lra_theory: LraTheory::new(),
             enum_theory: EnumTheory::new(),
             dl_theory: DlTheory::new(),
+            euf_theory: EufTheory::new(),
             notified_len: 0,
             user_scopes: Vec::new(),
         }
@@ -93,6 +97,31 @@ impl SeMiTONE {
     /// Allocates a new time point variable for difference logic constraints.
     pub fn new_time_point(&mut self) -> usize {
         self.dl_theory.new_var()
+    }
+
+    /// Allocates a new EUF variable.
+    pub fn new_euf(&mut self) -> EufExpr {
+        let id = self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len()));
+        EufExpr::Var(id)
+    }
+
+    /// Allocates a new EUF function application with the given function ID and arguments.
+    pub fn new_euf_app(&mut self, func_id: usize, args: Vec<Expr>) -> EufExpr {
+        let mut internal_args = Vec::with_capacity(args.len());
+        for arg in &args {
+            if let crate::ast::Expr::Euf(euf_arg) = arg {
+                let arg_id = match euf_arg {
+                    EufExpr::Var(n) => *n,
+                    EufExpr::App(internal_id, _) => *internal_id,
+                };
+                internal_args.push(arg_id);
+            } else {
+                unimplemented!("Supporto per funzioni ad argomenti misti non ancora implementato.");
+            }
+        }
+
+        let id = self.euf_theory.add_term(crate::euf_theory::Term::App(func_id, internal_args));
+        EufExpr::App(id, args)
     }
 
     /// Returns the current number of SAT variables allocated in the solver core.
@@ -321,6 +350,24 @@ impl SeMiTONE {
                 p
             }
             (Expr::Enum(e1), Expr::Enum(e2)) => self.mk_enum_eq(e1, e2),
+            (Expr::Euf(u1), Expr::Euf(u2)) => {
+                let id1 = match u1 {
+                    crate::ast::EufExpr::Var(n) => *n,
+                    crate::ast::EufExpr::App(n, _) => *n,
+                };
+                let id2 = match u2 {
+                    crate::ast::EufExpr::Var(n) => *n,
+                    crate::ast::EufExpr::App(n, _) => *n,
+                };
+
+                if id1 == id2 {
+                    return Lit::TRUE;
+                }
+
+                let (min_id, max_id) = if id1 < id2 { (id1, id2) } else { (id2, id1) };
+
+                self.get_or_create_proxy(TheoryConstraint::EufEq(min_id, max_id))
+            }
             _ => panic!("Type mismatch in Eq: cannot compare different domains.\nLeft: {:?}\nRight: {:?}", expr1, expr2),
         }
     }
@@ -579,6 +626,8 @@ impl SeMiTONE {
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
+        self.dl_theory.push();
+        self.euf_theory.push();
         self.sat_solver.enqueue_decision(lit)
     }
 
@@ -612,6 +661,7 @@ impl SeMiTONE {
         self.lra_theory.cancel_until(level);
         self.enum_theory.cancel_until(level);
         self.dl_theory.cancel_until(level);
+        self.euf_theory.cancel_until(level);
         self.notified_len = self.sat_solver.trail.len();
     }
 
@@ -684,6 +734,12 @@ impl SeMiTONE {
 
                         self.dl_theory.assert_edge(*to, *from, neg_bound, lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect())
                     }
+                    (TheoryConstraint::EufEq(t1, t2), false) => {
+                        self.euf_theory.merge(*t1, *t2, Some(lit));
+                        self.euf_theory.propagate_congruences();
+                        self.euf_theory.check_disequalities()
+                    }
+                    (TheoryConstraint::EufEq(t1, t2), true) => self.euf_theory.assert_disequality(*t1, *t2, lit),
                 };
 
                 if let Err(lemma) = theory_result {

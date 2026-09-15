@@ -9,6 +9,8 @@ pub enum Expr {
     Enum(EnumExpr),
     /// An integer or real arithmetic expression.
     Arith(ArithExpr),
+    /// An expression in the EUF theory.
+    Euf(EufExpr),
 }
 
 impl Expr {
@@ -30,6 +32,7 @@ impl fmt::Display for Expr {
             Expr::Bool(b) => write!(f, "{}", b),
             Expr::Enum(e) => write!(f, "{}", e),
             Expr::Arith(a) => write!(f, "{}", a),
+            Expr::Euf(e) => write!(f, "{}", e),
         }
     }
 }
@@ -449,6 +452,30 @@ impl fmt::Display for ArithExpr {
                 write!(f, "({})", es_str.join(" * "))
             }
             ArithExpr::Div(e1, e2) => write!(f, "({} / {})", e1, e2),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EufExpr {
+    Var(usize),
+    App(usize, Vec<Expr>),
+}
+
+impl EufExpr {
+    pub fn eq(&self, other: impl Into<EufExpr>) -> BoolExpr {
+        BoolExpr::Eq(Box::new(Expr::Euf(self.clone())), Box::new(Expr::Euf(other.into())))
+    }
+}
+
+impl fmt::Display for EufExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EufExpr::Var(n) => write!(f, "u{}", n),
+            EufExpr::App(func_id, args) => {
+                let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+                write!(f, "f{}({})", func_id, args_str.join(", "))
+            }
         }
     }
 }

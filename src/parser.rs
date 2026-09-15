@@ -1,12 +1,12 @@
 use crate::{
-    ast::{ArithExpr, BoolExpr},
+    ast::{ArithExpr, BoolExpr, EufExpr, Expr},
     rational::Rational,
     solver::Solver,
 };
 use num_traits::ToPrimitive;
 use smt2parser::{CommandStream, concrete};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, Write},
 };
@@ -19,6 +19,9 @@ pub struct SmtParser<'a> {
     pub solver: Solver,
     bool_vars: HashMap<String, BoolExpr>,
     real_vars: HashMap<String, ArithExpr>,
+    euf_vars: HashMap<String, EufExpr>,
+    euf_funcs: HashMap<String, usize>,
+    custom_sorts: HashSet<String>,
     is_unsat: bool,
     writer: &'a mut dyn Write,
 }
@@ -30,6 +33,9 @@ impl<'a> SmtParser<'a> {
             solver: Solver::new(),
             bool_vars: HashMap::new(),
             real_vars: HashMap::new(),
+            euf_vars: HashMap::new(),
+            euf_funcs: HashMap::new(),
+            custom_sorts: HashSet::new(),
             is_unsat: false,
             writer,
         }
@@ -72,27 +78,42 @@ impl<'a> SmtParser<'a> {
                     println!("Warning: Logic '{}' might not be fully supported by SeMiTONE yet.", symbol.0);
                 }
             }
-            concrete::Command::DeclareFun { symbol, sort, .. } => {
+            concrete::Command::DeclareSort { symbol, arity } => {
+                if arity.to_usize() != Some(0) {
+                    panic!("Parametric sorts are not supported yet.");
+                }
+                self.custom_sorts.insert(symbol.0.clone());
+            }
+            concrete::Command::DeclareFun { symbol, parameters, sort, .. } => {
                 let name = symbol.0;
                 let sort_name = match sort {
                     concrete::Sort::Simple { identifier } => Self::symbol_of_identifier(&identifier).to_string(),
                     _ => panic!("Complex sorts are not supported yet"),
                 };
 
-                match sort_name.as_str() {
-                    "Bool" => {
-                        let v = self.solver.smt.new_bool();
-                        self.bool_vars.insert(name, v);
+                if parameters.is_empty() {
+                    match sort_name.as_str() {
+                        "Bool" => {
+                            let v = self.solver.smt.new_bool();
+                            self.bool_vars.insert(name, v);
+                        }
+                        "Real" => {
+                            let v = self.solver.smt.new_real();
+                            self.real_vars.insert(name, v);
+                        }
+                        "Int" => {
+                            let v = self.solver.smt.new_int();
+                            self.real_vars.insert(name, v);
+                        }
+                        _ => panic!("Unsupported sort: {}", sort_name),
                     }
-                    "Real" => {
-                        let v = self.solver.smt.new_real();
-                        self.real_vars.insert(name, v);
+                } else {
+                    if !self.custom_sorts.contains(&sort_name) {
+                        unimplemented!("Parametric sorts are not supported yet. Found sort: {}", sort_name);
                     }
-                    "Int" => {
-                        let v = self.solver.smt.new_int();
-                        self.real_vars.insert(name, v);
-                    }
-                    _ => panic!("Unsupported sort: {}", sort_name),
+
+                    let func_id = self.euf_funcs.len();
+                    self.euf_funcs.insert(name, func_id);
                 }
             }
             concrete::Command::Assert { term } => {
@@ -184,7 +205,7 @@ impl<'a> SmtParser<'a> {
         }
     }
 
-    fn translate_bool_term(&self, term: &concrete::Term) -> BoolExpr {
+    fn translate_bool_term(&mut self, term: &concrete::Term) -> BoolExpr {
         match term {
             concrete::Term::QualIdentifier(id) => {
                 let name = Self::symbol_of_qual_identifier(id);
@@ -208,14 +229,28 @@ impl<'a> SmtParser<'a> {
                     "<" => self.translate_arith_term(&arguments[0]).lt(self.translate_arith_term(&arguments[1])),
                     ">" => self.translate_arith_term(&arguments[0]).gt(self.translate_arith_term(&arguments[1])),
                     "=" => {
-                        // SMT-LIB '=' is overloaded for both Booleans and Reals/Ints.
-                        // We attempt to parse the first argument as Arith. If it fails (panics),
-                        // it should theoretically be handled as Bool.
-                        // For a robust implementation, checking the symbol map is safer.
                         if self.is_bool_term(&arguments[0]) {
                             let left = self.translate_bool_term(&arguments[0]);
                             let right = self.translate_bool_term(&arguments[1]);
                             left.eq(&right)
+                        } else if let concrete::Term::QualIdentifier(id) = &arguments[0] {
+                            let name = Self::symbol_of_qual_identifier(id);
+                            if self.euf_vars.contains_key(name) || self.euf_funcs.contains_key(name) {
+                                let left = self.translate_euf_term(&arguments[0]);
+                                let right = self.translate_euf_term(&arguments[1]);
+                                left.eq(right)
+                            } else {
+                                self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1]))
+                            }
+                        } else if let concrete::Term::Application { qual_identifier, .. } = &arguments[0] {
+                            let name = Self::symbol_of_qual_identifier(qual_identifier);
+                            if self.euf_funcs.contains_key(name) {
+                                let left = self.translate_euf_term(&arguments[0]);
+                                let right = self.translate_euf_term(&arguments[1]);
+                                left.eq(right)
+                            } else {
+                                self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1]))
+                            }
                         } else {
                             self.translate_arith_term(&arguments[0]).eq(self.translate_arith_term(&arguments[1]))
                         }
@@ -282,6 +317,30 @@ impl<'a> SmtParser<'a> {
                 }
             }
             _ => panic!("Unsupported arithmetic term structure"),
+        }
+    }
+
+    fn translate_euf_term(&mut self, term: &concrete::Term) -> EufExpr {
+        match term {
+            concrete::Term::QualIdentifier(id) => {
+                let name = Self::symbol_of_qual_identifier(id);
+                self.euf_vars.get(name).cloned().unwrap_or_else(|| panic!("Undeclared EUF variable: {}", name))
+            }
+            concrete::Term::Application { qual_identifier, arguments } => {
+                let func_name = Self::symbol_of_qual_identifier(qual_identifier);
+
+                if let Some(&func_id) = self.euf_funcs.get(func_name) {
+                    let mut parsed_args = Vec::with_capacity(arguments.len());
+                    for arg in arguments {
+                        parsed_args.push(Expr::Euf(self.translate_euf_term(arg)));
+                    }
+
+                    self.solver.smt.new_euf_app(func_id, parsed_args)
+                } else {
+                    panic!("Unknown function: {}", func_name);
+                }
+            }
+            _ => panic!("Unsupported EUF term structure"),
         }
     }
 
