@@ -135,6 +135,18 @@ impl Default for Rational {
     }
 }
 
+impl From<i32> for Rational {
+    fn from(n: i32) -> Self {
+        Self::Finite(rug::Rational::from(n))
+    }
+}
+
+impl From<(i32, i32)> for Rational {
+    fn from((n, d): (i32, i32)) -> Self {
+        Self::Finite(rug::Rational::from((n, d)))
+    }
+}
+
 impl ops::Neg for Rational {
     type Output = Self;
 
@@ -386,6 +398,30 @@ impl InfRational {
 impl Default for InfRational {
     fn default() -> Self {
         Self::new(Rational::zero(), rug::Rational::from(0))
+    }
+}
+
+impl From<i32> for InfRational {
+    fn from(n: i32) -> Self {
+        Self::new(Rational::from(n), rug::Rational::from(0))
+    }
+}
+
+impl From<(i32, i32)> for InfRational {
+    fn from((n, d): (i32, i32)) -> Self {
+        Self::new(Rational::from((n, d)), rug::Rational::from(0))
+    }
+}
+
+impl From<Rational> for InfRational {
+    fn from(r: Rational) -> Self {
+        Self::new(r, rug::Rational::from(0))
+    }
+}
+
+impl From<(Rational, i32)> for InfRational {
+    fn from((r, i): (Rational, i32)) -> Self {
+        Self::new(r, rug::Rational::from(i))
     }
 }
 

@@ -8,6 +8,7 @@
 //! loop can use the decision, trail, and clause APIs exposed by [`SeMiTONE`].
 
 pub mod ast;
+mod dl_theory;
 mod enum_theory;
 mod lra_theory;
 #[cfg(feature = "parser")]

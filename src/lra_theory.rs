@@ -664,10 +664,6 @@ mod tests {
     use super::*;
     use rug::Rational as RugRational;
 
-    fn real(val: i32) -> InfRational {
-        InfRational::new(Rational::Finite(RugRational::from(val)), RugRational::from(0))
-    }
-
     fn add_test_row(theory: &mut LraTheory, basic_var: usize, terms: &[(usize, i32)]) {
         let mut row = SparseRow::new();
         for &(var, coeff) in terms {
@@ -722,18 +718,18 @@ mod tests {
 
         add_test_row(&mut lra, s, &[(x, 1), (y, 1)]);
 
-        lra.reals[x] = real(5);
-        lra.reals[y] = real(3);
-        lra.reals[s] = real(8);
+        lra.reals[x] = InfRational::from(5);
+        lra.reals[y] = InfRational::from(3);
+        lra.reals[s] = InfRational::from(8);
 
-        lra.set_lb(None, s, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, s, real(10)).expect("setting upper bound should succeed");
+        lra.set_lb(None, s, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, s, InfRational::from(10)).expect("setting upper bound should succeed");
 
-        lra.pivot_and_update(y, s, real(6));
+        lra.pivot_and_update(y, s, InfRational::from(6));
 
-        assert_eq!(lra.value(s), &real(6));
-        assert_eq!(lra.value(x), &real(5));
-        assert_eq!(lra.value(y), &real(1), "y should have absorbed the delta of -2");
+        assert_eq!(lra.value(s), &InfRational::from(6));
+        assert_eq!(lra.value(x), &InfRational::from(5));
+        assert_eq!(lra.value(y), &InfRational::from(1), "y should have absorbed the delta of -2");
     }
 
     #[test]
@@ -746,13 +742,13 @@ mod tests {
 
         add_test_row(&mut lra, s, &[(x, 1), (y, 1)]); // s = x + y
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, x, real(10)).expect("setting upper bound should succeed");
-        lra.set_lb(None, y, real(-10)).expect("setting lower bound should succeed");
-        lra.set_ub(None, y, real(10)).expect("setting upper bound should succeed");
-        lra.set_ub(None, s, real(5)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, InfRational::from(10)).expect("setting upper bound should succeed");
+        lra.set_lb(None, y, InfRational::from(-10)).expect("setting lower bound should succeed");
+        lra.set_ub(None, y, InfRational::from(10)).expect("setting upper bound should succeed");
+        lra.set_ub(None, s, InfRational::from(5)).expect("setting upper bound should succeed");
 
-        lra.set_lb(None, x, real(6)).expect("setting lower bound should succeed");
+        lra.set_lb(None, x, InfRational::from(6)).expect("setting lower bound should succeed");
 
         assert!(lra.value(s) > lra.ub(s));
 
@@ -760,8 +756,8 @@ mod tests {
 
         assert!(result.is_ok(), "check should resolve the out-of-bounds situation");
 
-        assert_eq!(lra.value(s), &real(5));
-        assert_eq!(lra.value(y), &real(-1));
+        assert_eq!(lra.value(s), &InfRational::from(5));
+        assert_eq!(lra.value(y), &InfRational::from(-1));
 
         assert!(!lra.is_basic(s));
         assert!(lra.value(s) <= lra.ub(s));
@@ -777,13 +773,13 @@ mod tests {
 
         add_test_row(&mut lra, s, &[(x, 1), (y, 1)]);
 
-        lra.set_lb(Some(Lit::new(1, false)), x, real(3)).expect("setting lower bound should succeed");
-        assert_eq!(lra.value(s), &real(3));
+        lra.set_lb(Some(Lit::new(1, false)), x, InfRational::from(3)).expect("setting lower bound should succeed");
+        assert_eq!(lra.value(s), &InfRational::from(3));
 
-        lra.set_lb(Some(Lit::new(2, false)), y, real(4)).expect("setting lower bound should succeed");
-        assert_eq!(lra.value(s), &real(7));
+        lra.set_lb(Some(Lit::new(2, false)), y, InfRational::from(4)).expect("setting lower bound should succeed");
+        assert_eq!(lra.value(s), &InfRational::from(7));
 
-        lra.set_ub(Some(Lit::new(3, false)), s, real(5)).expect("setting upper bound should succeed");
+        lra.set_ub(Some(Lit::new(3, false)), s, InfRational::from(5)).expect("setting upper bound should succeed");
 
         let result = lra.check();
 
@@ -863,14 +859,14 @@ mod tests {
         let mut lra = LraTheory::new();
         let x = lra.mk_real(); // 0
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, x, real(10)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, InfRational::from(10)).expect("setting upper bound should succeed");
 
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, true);
 
-        assert_eq!(result, real(10));
-        assert_eq!(lra.value(x), &real(10));
+        assert_eq!(result, InfRational::from(10));
+        assert_eq!(lra.value(x), &InfRational::from(10));
     }
 
     #[test]
@@ -878,14 +874,14 @@ mod tests {
         let mut lra = LraTheory::new();
         let x = lra.mk_real(); // 0
 
-        lra.set_lb(None, x, real(-5)).expect("setting lower bound should succeed");
-        lra.set_ub(None, x, real(10)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(-5)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, InfRational::from(10)).expect("setting upper bound should succeed");
 
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, false);
 
-        assert_eq!(result, real(-5));
-        assert_eq!(lra.value(x), &real(-5));
+        assert_eq!(result, InfRational::from(-5));
+        assert_eq!(lra.value(x), &InfRational::from(-5));
     }
 
     #[test]
@@ -893,7 +889,7 @@ mod tests {
         let mut lra = LraTheory::new();
         let x = lra.mk_real(); // 0
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
         // No upper bound: remains +inf by default
 
         let obj = build_row(&[(x, 1)]);
@@ -911,20 +907,20 @@ mod tests {
 
         add_test_row(&mut lra, s, &[(x, 1), (y, 1)]);
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, x, real(100)).expect("setting upper bound should succeed");
-        lra.set_lb(None, y, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, y, real(100)).expect("setting upper bound should succeed");
-        lra.set_lb(None, s, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, s, real(5)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, InfRational::from(100)).expect("setting upper bound should succeed");
+        lra.set_lb(None, y, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, y, InfRational::from(100)).expect("setting upper bound should succeed");
+        lra.set_lb(None, s, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, s, InfRational::from(5)).expect("setting upper bound should succeed");
 
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, true);
 
-        assert_eq!(result, real(5));
-        assert_eq!(lra.value(x), &real(5));
-        assert_eq!(lra.value(s), &real(5));
-        assert_eq!(lra.value(y), &real(0), "y should have absorbed the delta to maintain s = x + y");
+        assert_eq!(result, InfRational::from(5));
+        assert_eq!(lra.value(x), &InfRational::from(5));
+        assert_eq!(lra.value(s), &InfRational::from(5));
+        assert_eq!(lra.value(y), &InfRational::from(0), "y should have absorbed the delta to maintain s = x + y");
         assert!(lra.is_basic(x), "x should be basic after pivoting");
         assert!(!lra.is_basic(s), "s should no longer be basic after pivoting");
     }
@@ -938,17 +934,17 @@ mod tests {
 
         add_test_row(&mut lra, s, &[(x, 1), (y, 2)]);
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, x, real(3)).expect("setting upper bound should succeed");
-        lra.set_lb(None, y, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, y, real(3)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, x, InfRational::from(3)).expect("setting upper bound should succeed");
+        lra.set_lb(None, y, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, y, InfRational::from(3)).expect("setting upper bound should succeed");
 
         let obj = build_row(&[(s, 1)]);
         let result = lra.optimize(obj, true);
 
-        assert_eq!(result, real(9)); // x=3, y=3 => s = 3 + 2*3 = 9
-        assert_eq!(lra.value(x), &real(3));
-        assert_eq!(lra.value(y), &real(3));
+        assert_eq!(result, InfRational::from(9)); // x=3, y=3 => s = 3 + 2*3 = 9
+        assert_eq!(lra.value(x), &InfRational::from(3));
+        assert_eq!(lra.value(y), &InfRational::from(3));
     }
 
     #[test]
@@ -961,17 +957,17 @@ mod tests {
         add_test_row(&mut lra, s1, &[(x, 1)]);
         add_test_row(&mut lra, s2, &[(x, 1)]);
 
-        lra.set_lb(None, x, real(0)).expect("setting lower bound should succeed");
-        lra.set_ub(None, s1, real(5)).expect("setting upper bound should succeed");
-        lra.set_ub(None, s2, real(5)).expect("setting upper bound should succeed");
+        lra.set_lb(None, x, InfRational::from(0)).expect("setting lower bound should succeed");
+        lra.set_ub(None, s1, InfRational::from(5)).expect("setting upper bound should succeed");
+        lra.set_ub(None, s2, InfRational::from(5)).expect("setting upper bound should succeed");
 
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, true);
 
-        assert_eq!(result, real(5));
-        assert_eq!(lra.value(x), &real(5));
-        assert_eq!(lra.value(s1), &real(5));
-        assert_eq!(lra.value(s2), &real(5));
+        assert_eq!(result, InfRational::from(5));
+        assert_eq!(lra.value(x), &InfRational::from(5));
+        assert_eq!(lra.value(s1), &InfRational::from(5));
+        assert_eq!(lra.value(s2), &InfRational::from(5));
     }
 
     #[test]
