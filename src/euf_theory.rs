@@ -246,24 +246,24 @@ impl EufTheory {
             }
         }
 
-        curr = t1;
-        while curr != lca {
-            if let Some(edge) = &self.proof_tree[curr] {
-                if let Some(lit) = edge.reason {
-                    explanation.push(lit);
-                }
-                curr = edge.target;
-            }
-        }
+        self.explain_path_to(t1, lca, explanation);
+        self.explain_path_to(t2, lca, explanation);
+    }
 
-        curr = t2;
-        while curr != lca {
-            if let Some(edge) = &self.proof_tree[curr] {
-                if let Some(lit) = edge.reason {
-                    explanation.push(lit);
+    fn explain_path_to(&self, mut curr: usize, target: usize, explanation: &mut Vec<Lit>) {
+        while curr != target {
+            let edge = self.proof_tree[curr].expect("path to LCA must exist");
+            match edge.reason {
+                Some(lit) => explanation.push(lit),
+                None => {
+                    if let (Term::App(_, args_a), Term::App(_, args_b)) = (&self.terms[curr], &self.terms[edge.target]) {
+                        for (&a, &b) in args_a.iter().zip(args_b.iter()) {
+                            self.explain(a, b, explanation);
+                        }
+                    }
                 }
-                curr = edge.target;
             }
+            curr = edge.target;
         }
     }
 }
@@ -441,5 +441,34 @@ mod tests {
         let lemma = result.unwrap_err();
         assert!(lemma.contains(&!lit_a_eq_b));
         assert!(lemma.contains(&!lit_a_neq_b));
+    }
+
+    #[test]
+    fn test_explain_through_congruence() {
+        let mut euf = EufTheory::new();
+        let x = euf.add_term(Term::Var(0));
+        let y = euf.add_term(Term::Var(1));
+
+        let f_id = 100;
+        let fx = euf.add_term(Term::App(f_id, vec![x]));
+        let fy = euf.add_term(Term::App(f_id, vec![y]));
+
+        let lit_xy = Lit::new(1, false);
+        let lit_fx_neq_fy = Lit::new(2, false); // SAT asserts f(x) != f(y)
+
+        assert_eq!(euf.assert_disequality(fx, fy, lit_fx_neq_fy), Ok(true));
+
+        // x = y forces f(x) = f(y) by congruence, contradicting the disequality
+        euf.merge(x, y, Some(lit_xy));
+        euf.propagate_congruences();
+
+        let conflict = euf.check_disequalities();
+        assert!(conflict.is_err());
+
+        let lemma = conflict.unwrap_err();
+        // The lemma must also explain the congruence step through x = y,
+        // even though f(x) = f(y) was derived with reason: None.
+        assert!(lemma.contains(&!lit_xy), "incomplete lemma, missing congruence justification: {:?}", lemma);
+        assert!(lemma.contains(&!lit_fx_neq_fy));
     }
 }
