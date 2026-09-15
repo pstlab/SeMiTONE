@@ -21,6 +21,7 @@ pub mod solver;
 
 use crate::{
     ast::{ArithExpr, BoolExpr, EnumExpr, Expr},
+    dl_theory::DlTheory,
     enum_theory::EnumTheory,
     lra_theory::{LraTheory, SparseRow},
     proxy::{ProxyRegistry, TheoryConstraint},
@@ -39,6 +40,7 @@ pub struct SeMiTONE {
     sat_solver: SatSolver,
     lra_theory: LraTheory,
     enum_theory: EnumTheory,
+    dl_theory: DlTheory,
     notified_len: usize,
     user_scopes: Vec<(usize, usize)>,
 }
@@ -57,6 +59,7 @@ impl SeMiTONE {
             sat_solver: SatSolver::new(),
             lra_theory: LraTheory::new(),
             enum_theory: EnumTheory::new(),
+            dl_theory: DlTheory::new(),
             notified_len: 0,
             user_scopes: Vec::new(),
         }
@@ -568,6 +571,7 @@ impl SeMiTONE {
         self.sat_solver.cancel_until(level);
         self.lra_theory.cancel_until(level);
         self.enum_theory.cancel_until(level);
+        self.dl_theory.cancel_until(level);
         self.notified_len = self.sat_solver.trail.len();
     }
 
@@ -626,6 +630,20 @@ impl SeMiTONE {
                     (TheoryConstraint::LraUb(var, bound), true) => self.lra_theory.set_lb(Some(lit), *var, InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_negative() { rug::Rational::from(0) } else { rug::Rational::from(1) })),
                     (TheoryConstraint::EnumEq(var, val), false) => self.enum_theory.set_eq(Some(lit), *var, *val),
                     (TheoryConstraint::EnumEq(var, val), true) => self.enum_theory.set_neq(Some(lit), *var, *val),
+                    (TheoryConstraint::DlLeq(from, to, bound), true) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect()),
+                    (TheoryConstraint::DlLeq(from, to, bound), false) => {
+                        let rat_part = bound.rational_part().clone();
+                        let neg_rat = match rat_part {
+                            Rational::Finite(val) => Rational::Finite(-val),
+                            Rational::PositiveInf => Rational::NegativeInf,
+                            Rational::NegativeInf => Rational::PositiveInf,
+                        };
+
+                        let neg_inf = -bound.infinitesimal_part().clone() - rug::Rational::from(1);
+                        let neg_bound = InfRational::new(neg_rat, neg_inf);
+
+                        self.dl_theory.assert_edge(*to, *from, neg_bound, lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect())
+                    }
                 };
 
                 if let Err(lemma) = theory_result {
@@ -822,6 +840,7 @@ impl SeMiTONE {
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
+        self.dl_theory.push();
 
         let current_level = self.sat_solver.decision_level();
         self.user_scopes.push((current_level, clauses_len));
@@ -832,12 +851,7 @@ impl SeMiTONE {
     /// If no user scope is open, this is a no-op.
     pub fn pop(&mut self) {
         if let Some((saved_level, saved_clauses_len)) = self.user_scopes.pop() {
-            let target_level = saved_level - 1;
-            self.sat_solver.cancel_until(target_level);
-            self.lra_theory.cancel_until(target_level);
-            self.enum_theory.cancel_until(target_level);
-            self.notified_len = self.sat_solver.trail.len();
-
+            self.cancel_until(saved_level - 1);
             for watch_list in self.sat_solver.watches.iter_mut() {
                 watch_list.retain(|&clause_idx| clause_idx < saved_clauses_len);
             }

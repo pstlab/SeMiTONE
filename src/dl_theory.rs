@@ -1,10 +1,13 @@
-use crate::rational::{InfRational, Rational};
+use crate::{
+    Lit,
+    rational::{InfRational, Rational},
+};
 
 #[derive(Clone, Debug)]
 struct DlEdge {
     to: usize,
     weight: InfRational,
-    literal: usize,
+    literal: Lit,
 }
 
 pub(super) struct DlTheory {
@@ -13,10 +16,11 @@ pub(super) struct DlTheory {
     history: Vec<usize>,
 
     distances: Vec<InfRational>,
-    parents: Vec<Option<(usize, usize)>>,
+    parents: Vec<Option<(usize, Lit)>>,
 
     work_queue: std::collections::VecDeque<usize>,
     in_queue: Vec<bool>,
+    trail_lim: Vec<usize>,
 }
 
 impl DlTheory {
@@ -28,6 +32,7 @@ impl DlTheory {
             parents: Vec::new(),
             work_queue: std::collections::VecDeque::new(),
             in_queue: Vec::new(),
+            trail_lim: Vec::new(),
         }
     }
 
@@ -137,25 +142,33 @@ impl DlTheory {
         dists
     }
 
-    pub(super) fn cancel_until(&mut self, target_len: usize) {
-        while self.history.len() > target_len {
-            let from = self.history.pop().unwrap();
-            self.graph[from].pop();
+    pub(super) fn push(&mut self) {
+        self.trail_lim.push(self.history.len());
+    }
+
+    pub(super) fn cancel_until(&mut self, level: usize) {
+        if level < self.trail_lim.len() {
+            let target_len = self.trail_lim[level];
+            while self.history.len() > target_len {
+                let from = self.history.pop().unwrap();
+                self.graph[from].pop();
+            }
+            self.trail_lim.truncate(level);
         }
     }
 
-    pub(super) fn assert_edge(&mut self, from: usize, to: usize, weight: InfRational, literal: usize) -> Result<(), Vec<usize>> {
+    pub(super) fn assert_edge(&mut self, from: usize, to: usize, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
         self.graph[from].push(DlEdge { to, weight: weight.clone(), literal });
         self.history.push(from);
 
         self.check_negative_cycle(from, to, weight, literal)
     }
 
-    fn check_negative_cycle(&mut self, source_u: usize, target_v: usize, weight: InfRational, literal: usize) -> Result<(), Vec<usize>> {
+    fn check_negative_cycle(&mut self, source_u: usize, target_v: usize, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
         let new_dist = self.distances[source_u].clone() + weight;
 
         if new_dist >= self.distances[target_v] {
-            return Ok(());
+            return Ok(false);
         }
 
         self.distances[target_v] = new_dist;
@@ -190,10 +203,10 @@ impl DlTheory {
             }
         }
 
-        Ok(())
+        Ok(true)
     }
 
-    fn extract_nogood(&self, conflict_node: usize) -> Vec<usize> {
+    fn extract_nogood(&self, conflict_node: usize) -> Vec<Lit> {
         let mut nogood = Vec::new();
         let mut curr = conflict_node;
 
@@ -237,14 +250,14 @@ mod tests {
         let x = dl.new_var();
         let y = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(10), 100).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(100, false)).is_ok());
 
-        assert!(dl.assert_edge(x, y, InfRational::from(5), 101).is_ok());
+        assert!(dl.assert_edge(x, y, InfRational::from(5), Lit::new(101, false)).is_ok());
 
         assert_eq!(dl.ub(x), InfRational::from(10));
         assert_eq!(dl.ub(y), InfRational::from(15));
 
-        assert!(dl.assert_edge(x, zero, InfRational::from(-3), 102).is_ok());
+        assert!(dl.assert_edge(x, zero, InfRational::from(-3), Lit::new(102, false)).is_ok());
 
         assert_eq!(dl.lb(x), InfRational::from(3));
 
@@ -261,16 +274,16 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(5), 1).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(1, false)).is_ok());
 
-        let res = dl.assert_edge(x, zero, InfRational::from(-10), 2);
+        let res = dl.assert_edge(x, zero, InfRational::from(-10), Lit::new(2, false));
 
         assert!(res.is_err(), "Should detect a negative cycle");
 
         let nogood = res.unwrap_err();
         assert_eq!(nogood.len(), 2);
-        assert!(nogood.contains(&1));
-        assert!(nogood.contains(&2));
+        assert!(nogood.contains(&Lit::new(1, false)));
+        assert!(nogood.contains(&Lit::new(2, false)));
     }
 
     #[test]
@@ -279,9 +292,9 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(5), 1).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(1, false)).is_ok());
 
-        let res = dl.assert_edge(x, zero, InfRational::from((Rational::from(-5), -1)), 2);
+        let res = dl.assert_edge(x, zero, InfRational::from((Rational::from(-5), -1)), Lit::new(2, false));
 
         assert!(res.is_err(), "Should detect a negative cycle with infinitesimal weight");
     }
@@ -292,13 +305,14 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(10), 1).is_ok());
-        let target_len = dl.history.len();
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(1, false)).is_ok());
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(2), 2).is_ok());
+        dl.push();
+
+        assert!(dl.assert_edge(zero, x, InfRational::from(2), Lit::new(2, false)).is_ok());
         assert_eq!(dl.ub(x), InfRational::from(2), "UB should be updated to 2 after the second edge is added");
 
-        dl.cancel_until(target_len);
+        dl.cancel_until(0);
 
         assert_eq!(dl.graph[zero].len(), 1);
         assert_eq!(dl.ub(x), InfRational::from(10), "UB should revert to 10 after backtracking");
