@@ -1,13 +1,13 @@
 use crate::rational::{InfRational, Rational};
 
 #[derive(Clone, Debug)]
-pub struct DlEdge {
+struct DlEdge {
     to: usize,
     weight: InfRational,
     literal: usize,
 }
 
-pub struct DlTheory {
+pub(super) struct DlTheory {
     graph: Vec<Vec<DlEdge>>,
 
     history: Vec<usize>,
@@ -144,24 +144,22 @@ impl DlTheory {
         }
     }
 
-    pub(super) fn assert_edge(&mut self, from: usize, edge: DlEdge) -> Result<(), Vec<usize>> {
-        self.graph[from].push(edge.clone());
+    pub(super) fn assert_edge(&mut self, from: usize, to: usize, weight: InfRational, literal: usize) -> Result<(), Vec<usize>> {
+        self.graph[from].push(DlEdge { to, weight: weight.clone(), literal });
         self.history.push(from);
 
-        self.check_negative_cycle(from, edge)
+        self.check_negative_cycle(from, to, weight, literal)
     }
 
-    fn check_negative_cycle(&mut self, source_u: usize, new_edge: DlEdge) -> Result<(), Vec<usize>> {
-        let target_v = new_edge.to;
-
-        let new_dist = self.distances[source_u].clone() + new_edge.weight.clone();
+    fn check_negative_cycle(&mut self, source_u: usize, target_v: usize, weight: InfRational, literal: usize) -> Result<(), Vec<usize>> {
+        let new_dist = self.distances[source_u].clone() + weight;
 
         if new_dist >= self.distances[target_v] {
             return Ok(());
         }
 
         self.distances[target_v] = new_dist;
-        self.parents[target_v] = Some((source_u, new_edge.literal));
+        self.parents[target_v] = Some((source_u, literal));
 
         for node in self.work_queue.drain(..) {
             self.in_queue[node] = false;
@@ -239,14 +237,14 @@ mod tests {
         let x = dl.new_var();
         let y = dl.new_var();
 
-        assert!(dl.assert_edge(zero, DlEdge { to: x, weight: InfRational::from(10), literal: 100 }).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), 100).is_ok());
 
-        assert!(dl.assert_edge(x, DlEdge { to: y, weight: InfRational::from(5), literal: 101 }).is_ok());
+        assert!(dl.assert_edge(x, y, InfRational::from(5), 101).is_ok());
 
         assert_eq!(dl.ub(x), InfRational::from(10));
         assert_eq!(dl.ub(y), InfRational::from(15));
 
-        assert!(dl.assert_edge(x, DlEdge { to: zero, weight: InfRational::from(-3), literal: 102 }).is_ok());
+        assert!(dl.assert_edge(x, zero, InfRational::from(-3), 102).is_ok());
 
         assert_eq!(dl.lb(x), InfRational::from(3));
 
@@ -263,9 +261,9 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, DlEdge { to: x, weight: InfRational::from(5), literal: 1 }).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), 1).is_ok());
 
-        let res = dl.assert_edge(x, DlEdge { to: zero, weight: InfRational::from(-10), literal: 2 });
+        let res = dl.assert_edge(x, zero, InfRational::from(-10), 2);
 
         assert!(res.is_err(), "Should detect a negative cycle");
 
@@ -281,9 +279,9 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, DlEdge { to: x, weight: InfRational::from(5), literal: 1 }).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), 1).is_ok());
 
-        let res = dl.assert_edge(x, DlEdge { to: zero, weight: InfRational::from((Rational::from(-5), -1)), literal: 2 });
+        let res = dl.assert_edge(x, zero, InfRational::from((Rational::from(-5), -1)), 2);
 
         assert!(res.is_err(), "Should detect a negative cycle with infinitesimal weight");
     }
@@ -294,10 +292,10 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, DlEdge { to: x, weight: InfRational::from(10), literal: 1 }).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), 1).is_ok());
         let target_len = dl.history.len();
 
-        assert!(dl.assert_edge(zero, DlEdge { to: x, weight: InfRational::from(2), literal: 2 }).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(2), 2).is_ok());
         assert_eq!(dl.ub(x), InfRational::from(2), "UB should be updated to 2 after the second edge is added");
 
         dl.cancel_until(target_len);
