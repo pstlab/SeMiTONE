@@ -7,10 +7,11 @@ pub(super) enum Term {
     App(usize, Vec<usize>),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum EufUndoOp {
     Merged { child: usize, old_size: usize, parent: usize },
     AppendedUseList { parent: usize, count: usize },
+    ProofRerooted { changes: Vec<(usize, Option<ProofEdge>)> },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -108,7 +109,11 @@ impl EufTheory {
         self.parents[child] = parent;
         self.sizes[parent] += self.sizes[child];
 
-        self.proof_tree[child] = Some(ProofEdge { target: parent, reason });
+        // The proof tree must record the actual asserted edge (t1 -> t2), not the union-find
+        // root/child choice, otherwise `explain` can lose intermediate reasons on later merges.
+        let changes = self.reroot(t1);
+        self.undo_trail.push(EufUndoOp::ProofRerooted { changes });
+        self.proof_tree[t1] = Some(ProofEdge { target: t2, reason });
 
         let child_uses = self.use_list[child].clone();
         let parent_uses = self.use_list[parent].clone();
@@ -126,6 +131,31 @@ impl EufTheory {
         self.undo_trail.push(EufUndoOp::AppendedUseList { parent, count });
 
         true
+    }
+
+    /// Reverses the proof-tree edges from `node` up to its current root, so that `node`
+    /// becomes the root of its own explanation tree. Returns the previous edges, so the
+    /// caller can undo this on backtracking.
+    fn reroot(&mut self, node: usize) -> Vec<(usize, Option<ProofEdge>)> {
+        let mut changes = Vec::new();
+        let mut curr = node;
+        let mut incoming: Option<ProofEdge> = None;
+
+        loop {
+            let old_edge = self.proof_tree[curr];
+            changes.push((curr, old_edge));
+            self.proof_tree[curr] = incoming;
+
+            match old_edge {
+                Some(edge) => {
+                    incoming = Some(ProofEdge { target: curr, reason: edge.reason });
+                    curr = edge.target;
+                }
+                None => break,
+            }
+        }
+
+        changes
     }
 
     pub(super) fn propagate_congruences(&mut self) {
@@ -174,12 +204,15 @@ impl EufTheory {
                 EufUndoOp::Merged { child, old_size, parent } => {
                     self.parents[child] = child;
                     self.sizes[parent] = old_size;
-
-                    self.proof_tree[child] = None;
                 }
                 EufUndoOp::AppendedUseList { parent, count } => {
                     let new_len = self.use_list[parent].len() - count;
                     self.use_list[parent].truncate(new_len);
+                }
+                EufUndoOp::ProofRerooted { changes } => {
+                    for (node, old_edge) in changes.into_iter().rev() {
+                        self.proof_tree[node] = old_edge;
+                    }
                 }
             }
         }
@@ -232,5 +265,181 @@ impl EufTheory {
                 curr = edge.target;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_basic_union_find() {
+        let mut euf = EufTheory::new();
+        let a = euf.add_term(Term::Var(0));
+        let b = euf.add_term(Term::Var(1));
+        let c = euf.add_term(Term::Var(2));
+
+        assert_ne!(euf.find(a), euf.find(b));
+
+        // a = b
+        let l1 = Lit::new(1, false);
+        assert!(euf.merge(a, b, Some(l1)));
+        assert_eq!(euf.find(a), euf.find(b));
+
+        // b = c
+        let l2 = Lit::new(2, false);
+        assert!(euf.merge(b, c, Some(l2)));
+        assert_eq!(euf.find(a), euf.find(c));
+    }
+
+    #[test]
+    fn test_congruence_closure() {
+        let mut euf = EufTheory::new();
+        let x = euf.add_term(Term::Var(0));
+        let y = euf.add_term(Term::Var(1));
+
+        // f(x) and f(y)
+        let f_id = 100;
+        let fx = euf.add_term(Term::App(f_id, vec![x]));
+        let fy = euf.add_term(Term::App(f_id, vec![y]));
+
+        assert_ne!(euf.find(fx), euf.find(fy));
+
+        // Assert x = y
+        euf.merge(x, y, Some(Lit::new(1, false)));
+
+        // The theory must deduce f(x) = f(y)
+        euf.propagate_congruences();
+        assert_eq!(euf.find(fx), euf.find(fy));
+    }
+
+    #[test]
+    fn test_nested_congruence_closure() {
+        let mut euf = EufTheory::new();
+        let x = euf.add_term(Term::Var(0));
+        let y = euf.add_term(Term::Var(1));
+
+        // f(x) and f(y)
+        let f_id = 100;
+        let fx = euf.add_term(Term::App(f_id, vec![x]));
+        let fy = euf.add_term(Term::App(f_id, vec![y]));
+
+        // g(f(x)) and g(f(y))
+        let g_id = 200;
+        let gfx = euf.add_term(Term::App(g_id, vec![fx]));
+        let gfy = euf.add_term(Term::App(g_id, vec![fy]));
+
+        // Assert x = y. This must trigger a chain reaction!
+        euf.merge(x, y, Some(Lit::new(1, false)));
+        euf.propagate_congruences();
+
+        assert_eq!(euf.find(fx), euf.find(fy), "f(x) must equal f(y)");
+        assert_eq!(euf.find(gfx), euf.find(gfy), "The chain reaction must also merge g(f(x)) and g(f(y))");
+    }
+
+    #[test]
+    fn test_backtracking() {
+        let mut euf = EufTheory::new();
+        let a = euf.add_term(Term::Var(0));
+        let b = euf.add_term(Term::Var(1));
+        let c = euf.add_term(Term::Var(2));
+
+        // Level 0: a = b
+        euf.merge(a, b, Some(Lit::new(1, false)));
+        assert_eq!(euf.find(a), euf.find(b));
+
+        // Start level 1
+        euf.push();
+
+        // Level 1: b = c
+        euf.merge(b, c, Some(Lit::new(2, false)));
+        assert_eq!(euf.find(a), euf.find(c));
+
+        // Undo level 1
+        euf.cancel_until(0);
+
+        // a must still equal b, but not c
+        assert_eq!(euf.find(a), euf.find(b));
+        assert_ne!(euf.find(a), euf.find(c));
+    }
+
+    #[test]
+    fn test_proof_forest_explain() {
+        let mut euf = EufTheory::new();
+        let a = euf.add_term(Term::Var(0));
+        let b = euf.add_term(Term::Var(1));
+        let c = euf.add_term(Term::Var(2));
+        let d = euf.add_term(Term::Var(3));
+
+        let l1 = Lit::new(1, false);
+        let l2 = Lit::new(2, false);
+        let l3 = Lit::new(3, false);
+
+        // a = b = c = d
+        euf.merge(a, b, Some(l1));
+        euf.merge(b, c, Some(l2));
+        euf.merge(c, d, Some(l3));
+
+        // Explain why a == d
+        let mut lemma = Vec::new();
+        euf.explain(a, d, &mut lemma);
+
+        // Must contain exactly the three reasons that link a and d
+        assert_eq!(lemma.len(), 3);
+        assert!(lemma.contains(&l1));
+        assert!(lemma.contains(&l2));
+        assert!(lemma.contains(&l3));
+    }
+
+    #[test]
+    fn test_disequality_conflict() {
+        let mut euf = EufTheory::new();
+        let a = euf.add_term(Term::Var(0));
+        let b = euf.add_term(Term::Var(1));
+        let c = euf.add_term(Term::Var(2));
+
+        let lit_a_eq_b = Lit::new(1, false);
+        let lit_b_eq_c = Lit::new(2, false);
+        let lit_a_neq_c = Lit::new(3, false); // SAT asserts a != c
+
+        // Assert a != c
+        assert_eq!(euf.assert_disequality(a, c, lit_a_neq_c), Ok(true));
+
+        // a = b
+        euf.merge(a, b, Some(lit_a_eq_b));
+
+        // b = c. This forces a = c, violating the disequality!
+        euf.merge(b, c, Some(lit_b_eq_c));
+
+        // check_disequalities must notice this and produce the conflict
+        let conflict = euf.check_disequalities();
+        assert!(conflict.is_err());
+
+        // The conflict must negate the involved literals: !(a=b) V !(b=c) V (a!=c)
+        let lemma = conflict.unwrap_err();
+        assert!(lemma.contains(&!lit_a_eq_b));
+        assert!(lemma.contains(&!lit_b_eq_c));
+        assert!(lemma.contains(&!lit_a_neq_c));
+    }
+
+    #[test]
+    fn test_disequality_immediate_conflict() {
+        let mut euf = EufTheory::new();
+        let a = euf.add_term(Term::Var(0));
+        let b = euf.add_term(Term::Var(1));
+
+        let lit_a_eq_b = Lit::new(1, false);
+        let lit_a_neq_b = Lit::new(2, false);
+
+        // Merge a and b
+        euf.merge(a, b, Some(lit_a_eq_b));
+
+        // Then try to force a != b. The error must be immediate.
+        let result = euf.assert_disequality(a, b, lit_a_neq_b);
+        assert!(result.is_err());
+
+        let lemma = result.unwrap_err();
+        assert!(lemma.contains(&!lit_a_eq_b));
+        assert!(lemma.contains(&!lit_a_neq_b));
     }
 }
