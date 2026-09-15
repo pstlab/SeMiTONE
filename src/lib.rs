@@ -90,6 +90,11 @@ impl SeMiTONE {
         EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
     }
 
+    /// Allocates a new time point variable for difference logic constraints.
+    pub fn new_time_point(&mut self) -> usize {
+        self.dl_theory.new_var()
+    }
+
     /// Returns the current number of SAT variables allocated in the solver core.
     ///
     /// This includes user-visible Boolean variables and internal proxy variables
@@ -242,6 +247,10 @@ impl SeMiTONE {
                 BoolExpr::Le(a1, a2) => self.mk_ge(a1, a2, true),
                 BoolExpr::Ge(a1, a2) => self.mk_le(a1, a2, true),
                 BoolExpr::Gt(a1, a2) => self.mk_le(a1, a2, false),
+                BoolExpr::DlLt(f, t, b) => self.mk_dl_ge(*f, *t, b.clone(), false), // !(x < y) => x >= y
+                BoolExpr::DlLe(f, t, b) => self.mk_dl_ge(*f, *t, b.clone(), true),  // !(x <= y) => x > y
+                BoolExpr::DlGe(f, t, b) => self.mk_dl_le(*f, *t, b.clone(), true),  // !(x >= y) => x < y
+                BoolExpr::DlGt(f, t, b) => self.mk_dl_le(*f, *t, b.clone(), false), // !(x > y) => x <= y
                 _ => !self.encode_bool(inner),
             },
             BoolExpr::And(terms) => {
@@ -287,6 +296,11 @@ impl SeMiTONE {
             BoolExpr::Ge(e1, e2) => self.mk_ge(e1, e2, false),
             BoolExpr::Gt(e1, e2) => self.mk_ge(e1, e2, true),
             BoolExpr::Eq(e1, e2) => self.encode_eq(e1, e2),
+            BoolExpr::DlLt(from, to, b) => self.mk_dl_le(*from, *to, b.clone(), true),
+            BoolExpr::DlLe(from, to, b) => self.mk_dl_le(*from, *to, b.clone(), false),
+            BoolExpr::DlGt(from, to, b) => self.mk_dl_ge(*from, *to, b.clone(), true),
+            BoolExpr::DlGe(from, to, b) => self.mk_dl_ge(*from, *to, b.clone(), false),
+            BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(*from, *to, b.clone()),
         }
     }
 
@@ -434,6 +448,32 @@ impl SeMiTONE {
                 self.get_or_create_proxy(bound)
             }
         }
+    }
+
+    fn mk_dl_le(&mut self, from: usize, to: usize, bound: rug::Rational, strict: bool) -> Lit {
+        let delta = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
+        let inf_bound = InfRational::new(Rational::Finite(bound), delta);
+
+        let constraint = TheoryConstraint::DlLeq(from, to, inf_bound);
+        self.get_or_create_proxy(constraint)
+    }
+
+    fn mk_dl_ge(&mut self, from: usize, to: usize, bound: rug::Rational, strict: bool) -> Lit {
+        self.mk_dl_le(to, from, -bound, strict)
+    }
+
+    fn mk_dl_eq(&mut self, from: usize, to: usize, bound: rug::Rational) -> Lit {
+        let le_lit = self.mk_dl_le(from, to, bound.clone(), false);
+        let ge_lit = self.mk_dl_ge(from, to, bound, false);
+
+        let proxy_var = self.sat_solver.mk_var();
+        let p = Lit::new(proxy_var, false);
+
+        self.sat_solver.add_clause([!p, le_lit]).expect("Failed to add clause");
+        self.sat_solver.add_clause([!p, ge_lit]).expect("Failed to add clause");
+        self.sat_solver.add_clause([!le_lit, !ge_lit, p]).expect("Failed to add clause");
+
+        p
     }
 
     fn diff(&self, e1: &ArithExpr, e2: &ArithExpr) -> (SparseRow, rug::Rational) {
@@ -743,6 +783,89 @@ impl SeMiTONE {
                     None
                 }
             }
+            BoolExpr::DlLt(from, to, bound) => {
+                let (lb_from, ub_from) = self.get_time_bounds(*from);
+                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
+
+                // Max possible distance: ub_to - lb_from
+                // Min possible distance: lb_to - ub_from
+                let max_dist = ub_to.clone() - lb_from.clone();
+                let min_dist = lb_to - ub_from;
+
+                if max_dist < bound_inf {
+                    Some(true)
+                } else if min_dist >= bound_inf {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::DlLe(from, to, bound) => {
+                let (lb_from, ub_from) = self.get_time_bounds(*from);
+                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
+
+                let max_dist = ub_to.clone() - lb_from.clone();
+                let min_dist = lb_to - ub_from;
+
+                if max_dist <= bound_inf {
+                    Some(true)
+                } else if min_dist > bound_inf {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::DlGt(from, to, bound) => {
+                let (lb_from, ub_from) = self.get_time_bounds(*from);
+                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
+
+                let max_dist = ub_to.clone() - lb_from.clone();
+                let min_dist = lb_to - ub_from;
+
+                if min_dist > bound_inf {
+                    Some(true)
+                } else if max_dist <= bound_inf {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::DlGe(from, to, bound) => {
+                let (lb_from, ub_from) = self.get_time_bounds(*from);
+                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
+
+                let max_dist = ub_to.clone() - lb_from.clone();
+                let min_dist = lb_to - ub_from;
+
+                if min_dist >= bound_inf {
+                    Some(true)
+                } else if max_dist < bound_inf {
+                    Some(false)
+                } else {
+                    None
+                }
+            }
+            BoolExpr::DlEq(from, to, bound) => {
+                let (lb_from, ub_from) = self.get_time_bounds(*from);
+                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
+
+                let max_dist = ub_to.clone() - lb_from.clone();
+                let min_dist = lb_to - ub_from;
+
+                // Exact equality means max_dist and min_dist are both exactly equal to bound
+                if max_dist == bound_inf && min_dist == bound_inf {
+                    Some(true)
+                } else if max_dist < bound_inf || min_dist > bound_inf {
+                    Some(false) // It's impossible to satisfy the equality
+                } else {
+                    None
+                }
+            }
             BoolExpr::Eq(e1, e2) => match (e1.as_ref(), e2.as_ref()) {
                 (Expr::Arith(a1), Expr::Arith(a2)) => {
                     let (lb1, ub1) = self.get_arith_bounds(a1)?;
@@ -828,6 +951,11 @@ impl SeMiTONE {
                 if domain.len() == 1 { domain.iter().next().copied() } else { None }
             }
         }
+    }
+
+    /// Returns the current lower and upper bounds of a difference logic variable.
+    pub fn get_time_bounds(&self, tp: usize) -> (InfRational, InfRational) {
+        (self.dl_theory.lb(tp), self.dl_theory.ub(tp))
     }
 
     /// Opens a new incremental user scope for assertions and decisions.
