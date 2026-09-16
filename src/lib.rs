@@ -1070,13 +1070,19 @@ impl SeMiTONE {
         if let Err((var, val)) = self.lra_theory.check_ints() {
             println!("Integer variable {} has fractional value {}", var, val);
 
-            if let Some((cut_row, cut_rhs)) = self.lra_theory.new_gomory_cut() {
+            if let Some((cut_row, cut_rhs, explanation_bounds)) = self.lra_theory.new_gomory_cut() {
                 let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
                 let bound = InfRational::new(Rational::Finite(cut_rhs), rug::Rational::from(0));
                 let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
 
-                println!("Generated global Gomory cut!");
-                let lemma = vec![cut_lit];
+                let mut lemma = Vec::with_capacity(explanation_bounds.len() + 1);
+                for constraint in explanation_bounds {
+                    let proxy = self.get_or_create_proxy(constraint);
+                    lemma.push(!proxy);
+                }
+                lemma.push(cut_lit);
+
+                println!("Generated global Gomory cut with {} dependencies!", lemma.len() - 1);
 
                 let current_level = self.sat_solver.decision_level();
                 return Err((current_level, lemma));

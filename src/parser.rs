@@ -730,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn test_complex_mixed_unsat() {
+    fn test_complex_mixed_sat() {
         let script = "
             (set-logic QF_UFLIRA)
             (declare-sort U 0)

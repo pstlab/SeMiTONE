@@ -1,5 +1,5 @@
 use crate::{
-    out_of_bounds,
+    TheoryConstraint, out_of_bounds,
     rational::{InfRational, Rational},
     sat_solver::Lit,
 };
@@ -320,15 +320,18 @@ impl LraTheory {
         Ok(())
     }
 
-    pub(super) fn new_gomory_cut(&self) -> Option<(SparseRow, rug::Rational)> {
+    pub(super) fn new_gomory_cut(&self) -> Option<(SparseRow, rug::Rational, Vec<TheoryConstraint>)> {
         for (b_var, row) in &self.tableau {
             if !self.ints[*b_var] {
                 continue;
             }
 
             let val = self.value(*b_var);
-            let rat_part = val.rational_part();
+            if !val.infinitesimal_part().is_zero() {
+                continue;
+            }
 
+            let rat_part = val.rational_part();
             let Rational::Finite(rat_val) = rat_part else {
                 continue;
             };
@@ -350,8 +353,16 @@ impl LraTheory {
             let mut cut_rhs = rug::Rational::from(1);
             let one_minus_f0 = rug::Rational::from(1) - &f0;
 
+            let mut explanation = Vec::new();
+
             for (nb_var, nb_coeff) in row.iter() {
                 let nb_val = self.value(*nb_var);
+
+                if !nb_val.infinitesimal_part().is_zero() {
+                    valid_row = false;
+                    break;
+                }
+
                 let lb = self.lb(*nb_var);
                 let ub = self.ub(*nb_var);
 
@@ -369,6 +380,12 @@ impl LraTheory {
                     break;
                 };
 
+                if at_lower {
+                    explanation.push(TheoryConstraint::LraLb(*nb_var, lb.clone()));
+                } else {
+                    explanation.push(TheoryConstraint::LraUb(*nb_var, ub.clone()));
+                }
+
                 let is_int_var = self.ints[*nb_var];
                 let cut_coeff = if at_lower {
                     if !is_int_var {
@@ -377,7 +394,6 @@ impl LraTheory {
                         let mut floor_aj = nb_coeff.clone();
                         floor_aj.floor_mut();
                         let fj = nb_coeff.clone() - floor_aj;
-
                         if fj <= one_minus_f0 { fj / &one_minus_f0 } else { (rug::Rational::from(1) - fj) / &f0 }
                     }
                 } else {
@@ -387,10 +403,10 @@ impl LraTheory {
                         let mut floor_aj = nb_coeff.clone();
                         floor_aj.floor_mut();
                         let fj = nb_coeff.clone() - floor_aj;
-
                         if fj <= f0 { fj / &f0 } else { (rug::Rational::from(1) - fj) / &one_minus_f0 }
                     }
                 };
+
                 if !cut_coeff.is_zero() {
                     let term = rug::Rational::from(&cut_coeff * nb_rat_val);
                     if at_lower {
@@ -405,7 +421,7 @@ impl LraTheory {
             }
 
             if valid_row && !cut_row.is_empty() {
-                return Some((cut_row, cut_rhs));
+                return Some((cut_row, cut_rhs, explanation));
             }
         }
         None
