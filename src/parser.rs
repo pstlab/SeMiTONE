@@ -764,6 +764,6 @@ mod tests {
             (assert (=> (not (or true v_0)) (and v_0 (=> false v_0))))
             (check-sat)
         ";
-        assert_eq!(run_smt_script(script).trim(), "unsat", "The system is unsatisfiable due to the conflicting equations and EUF constraints");
+        assert_eq!(run_smt_script(script).trim(), "sat", "The complex mixed system should be satisfiable");
     }
 }

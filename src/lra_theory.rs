@@ -310,12 +310,12 @@ impl LraTheory {
     }
 
     /// Checks if all integer variables have integer values.
-    pub(super) fn check_ints(&self) -> Result<(), (usize, Rational)> {
+    pub(super) fn check_ints(&self) -> Result<(), (usize, InfRational)> {
         if let Some((var, val)) = self.ints.iter().enumerate().filter(|(_, is_int)| **is_int).find_map(|(var, _)| {
             let val = self.value(var);
             (!val.infinitesimal_part().is_zero() || !val.rational_part().is_integer()).then_some((var, val))
         }) {
-            return Err((var, val.rational_part().clone()));
+            return Err((var, val.clone()));
         }
         Ok(())
     }
@@ -330,7 +330,9 @@ impl LraTheory {
 
     /// Generates a Gomory cut for the given basic variable if it has a fractional value.
     pub(super) fn generate_gomory_cut(&mut self, basic_var: usize) -> Option<(SparseRow, rug::Rational)> {
-        let Rational::Finite(val) = self.value(basic_var).rational_part() else { unreachable!("basic variable should have a finite rational value") };
+        let Rational::Finite(val) = self.value(basic_var).rational_part() else {
+            return None;
+        };
         let f0 = Self::fract_part(val);
 
         if f0.is_zero() {
@@ -339,19 +341,43 @@ impl LraTheory {
 
         let row = self.tableau.get(&basic_var)?;
         let mut cut_row = SparseRow::new();
+        let mut cut_rhs = f0.clone();
 
         for (nb_var, coeff) in row.iter() {
             if !self.ints[*nb_var] {
                 return None;
             }
 
-            let fj = Self::fract_part(coeff);
+            let Rational::Finite(nb_val) = self.value(*nb_var).rational_part() else {
+                return None;
+            };
+            let lb = self.lb(*nb_var);
+            let ub = self.ub(*nb_var);
+
+            let (a_j, bound_val, is_lower) = match lb.rational_part() {
+                Rational::Finite(lb_val) if nb_val == lb_val => (coeff.clone(), nb_val.clone(), true),
+                _ => match ub.rational_part() {
+                    Rational::Finite(ub_val) if nb_val == ub_val => (-coeff.clone(), nb_val.clone(), false),
+                    _ => return None,
+                },
+            };
+
+            let fj = Self::fract_part(&a_j);
             if !fj.is_zero() {
-                cut_row.add_coeff(*nb_var, &fj);
+                if is_lower {
+                    // fj * (x - L) >= f0  =>  fj * x >= f0 + fj * L
+                    cut_row.add_coeff(*nb_var, &fj);
+                    cut_rhs += fj.clone() * bound_val;
+                } else {
+                    // fj * (U - x) >= f0  =>  -fj * x >= f0 - fj * U
+                    let neg_fj = -fj.clone();
+                    cut_row.add_coeff(*nb_var, &neg_fj);
+                    cut_rhs -= fj.clone() * bound_val;
+                }
             }
         }
 
-        (!cut_row.is_empty()).then_some((cut_row, f0))
+        (!cut_row.is_empty()).then_some((cut_row, cut_rhs))
     }
 
     pub(super) fn push(&mut self) {
