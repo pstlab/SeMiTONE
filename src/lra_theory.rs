@@ -380,6 +380,114 @@ impl LraTheory {
         (!cut_row.is_empty()).then_some((cut_row, cut_rhs))
     }
 
+    pub(super) fn new_gomory_cut(&self) -> Option<(SparseRow, rug::Rational)> {
+        for (b_var, row) in &self.tableau {
+            let val = self.value(*b_var);
+            if !self.ints[*b_var] || !val.infinitesimal_part().is_zero() {
+                continue;
+            }
+            let Rational::Finite(rat_val) = val.rational_part() else {
+                continue;
+            };
+            if rat_val.is_integer() {
+                continue;
+            }
+            let mut floor_val = rat_val.clone();
+            floor_val.floor_mut();
+            let f0 = rat_val.clone() - floor_val;
+
+            let one_minus_f0 = rug::Rational::from(1) - &f0;
+            let mut cut_rhs = rug::Rational::from(1);
+            let mut cut_row = SparseRow::new();
+            let mut valid_row = true;
+
+            for (nb_var, nb_coeff) in row.iter() {
+                let nb_val = self.value(*nb_var);
+                if !nb_val.infinitesimal_part().is_zero() {
+                    valid_row = false;
+                    break;
+                }
+
+                let nb_rat_part = nb_val.rational_part();
+                let Rational::Finite(nb_rat_val) = nb_rat_part else {
+                    valid_row = false;
+                    break;
+                };
+
+                let lb = self.lb(*nb_var);
+                let ub = self.ub(*nb_var);
+
+                let at_lower = nb_val == lb;
+                let at_upper = nb_val == ub;
+
+                if !at_lower && !at_upper {
+                    valid_row = false;
+                    break;
+                }
+
+                let is_int_var = self.ints[*nb_var];
+                let mut cut_coeff = rug::Rational::new();
+
+                if at_lower {
+                    if !is_int_var {
+                        if *nb_coeff >= 0 {
+                            cut_coeff = nb_coeff.clone() / &one_minus_f0;
+                        } else {
+                            cut_coeff = -nb_coeff.clone() / &f0;
+                        }
+                    } else {
+                        let mut floor_aj = nb_coeff.clone();
+                        floor_aj.floor_mut();
+                        let fj = nb_coeff.clone() - floor_aj;
+
+                        if fj <= one_minus_f0 {
+                            cut_coeff = fj / &one_minus_f0;
+                        } else {
+                            cut_coeff = (rug::Rational::from(1) - fj) / &f0;
+                        }
+                    }
+
+                    if !cut_coeff.is_zero() {
+                        let term = rug::Rational::from(&cut_coeff * nb_rat_val);
+                        cut_rhs += term;
+                        cut_row.add_coeff(*nb_var, &cut_coeff);
+                    }
+                } else {
+                    if !is_int_var {
+                        if *nb_coeff >= 0 {
+                            cut_coeff = nb_coeff.clone() / &f0;
+                        } else {
+                            cut_coeff = -nb_coeff.clone() / &one_minus_f0;
+                        }
+                    } else {
+                        let mut floor_aj = nb_coeff.clone();
+                        floor_aj.floor_mut();
+                        let fj = nb_coeff.clone() - floor_aj;
+
+                        if fj <= f0 {
+                            cut_coeff = fj / &f0;
+                        } else {
+                            cut_coeff = (rug::Rational::from(1) - fj) / &one_minus_f0;
+                        }
+                    }
+
+                    if !cut_coeff.is_zero() {
+                        let term = rug::Rational::from(&cut_coeff * nb_rat_val);
+                        cut_rhs -= term;
+
+                        let neg_coeff = -cut_coeff;
+                        cut_row.add_coeff(*nb_var, &neg_coeff);
+                    }
+                }
+            }
+
+            if valid_row && !cut_row.is_empty() {
+                return Some((cut_row, cut_rhs));
+            }
+        }
+        None
+    }
+
     pub(super) fn push(&mut self) {
         self.trail_lim.push(self.bound_trail.len());
     }
