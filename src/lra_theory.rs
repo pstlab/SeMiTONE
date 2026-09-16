@@ -54,6 +54,14 @@ impl LraTheory {
         var
     }
 
+    pub fn is_int_var(&self, var: usize) -> bool {
+        self.ints[var]
+    }
+
+    pub fn is_int_expr(&self, expr: &SparseRow) -> bool {
+        expr.iter().all(|(var, coeff)| self.ints[*var] && coeff.is_integer())
+    }
+
     fn zero() -> InfRational {
         InfRational::new(Rational::Finite(RugRational::from(0)), RugRational::from(0))
     }
@@ -83,7 +91,9 @@ impl LraTheory {
             return slack;
         }
 
-        let slack = self.mk_real();
+        let is_int_slack = self.is_int_expr(&vars);
+        let slack = self.mk_var(is_int_slack);
+
         self.reals[slack] = self.row_value(&vars);
 
         self.tableau.insert(slack, vars.clone());

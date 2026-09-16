@@ -32,7 +32,6 @@ use crate::{
 };
 use rug::Assign;
 pub use sat_solver::Lit;
-use tracing::{debug, trace};
 
 /// Main solver entry point for propositional, linear arithmetic, and enum constraints.
 ///
@@ -439,13 +438,21 @@ impl SeMiTONE {
             }
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
-                let bound = InfRational::new(Rational::Finite(-const_term / coeff), if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) } / coeff);
+                let is_int = self.lra_theory.is_int_var(*var);
+
+                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(-1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(-1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+
+                let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
                 let bound = if coeff.is_positive() { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
             _ => {
                 let slack = self.lra_theory.get_or_create_slack(vars);
-                let bound = TheoryConstraint::LraUb(slack, InfRational::new(Rational::Finite(-const_term), if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) }));
+                let is_int = self.lra_theory.is_int_var(slack);
+
+                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(-1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(-1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+
+                let bound = TheoryConstraint::LraUb(slack, InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift));
                 self.get_or_create_proxy(bound)
             }
         }
@@ -485,13 +492,21 @@ impl SeMiTONE {
             }
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
-                let bound = InfRational::new(Rational::Finite(-const_term / coeff), if strict { rug::Rational::from(1) } else { rug::Rational::from(0) } / coeff);
+                let is_int = self.lra_theory.is_int_var(*var);
+
+                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+
+                let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
                 let bound = if coeff.is_positive() { TheoryConstraint::LraLb(*var, bound) } else { TheoryConstraint::LraUb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
             _ => {
                 let slack = self.lra_theory.get_or_create_slack(vars);
-                let bound = TheoryConstraint::LraLb(slack, InfRational::new(Rational::Finite(-const_term), if strict { rug::Rational::from(1) } else { rug::Rational::from(0) }));
+                let is_int = self.lra_theory.is_int_var(slack);
+
+                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+
+                let bound = TheoryConstraint::LraLb(slack, InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift));
                 self.get_or_create_proxy(bound)
             }
         }
