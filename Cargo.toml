@@ -18,7 +18,7 @@ name = "semitone"
 required-features = ["parser"]
 
 [features]
-default = []
+default = ["parser"]
 solver = []
 parser = ["dep:smt2parser", "dep:num-traits", "solver"]
 
@@ -32,6 +32,11 @@ num-traits = { version = "0.2.15", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
+rand = "0.10.2"
+
+[[test]]
+name = "fuzz_tests"
+required-features = ["parser"]
 
 [[bench]]
 name = "parser_bench"

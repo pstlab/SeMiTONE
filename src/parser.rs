@@ -80,7 +80,8 @@ impl<'a> SmtParser<'a> {
     fn execute_command(&mut self, cmd: concrete::Command) {
         match cmd {
             concrete::Command::SetLogic { symbol } => {
-                if symbol.0 != "QF_LRA" && symbol.0 != "QF_LIA" && symbol.0 != "QF_NRA" {
+                let supported_logics = ["QF_LRA", "QF_LIA", "QF_UF", "QF_UFLRA", "QF_UFLIA", "QF_UFLIRA"];
+                if !supported_logics.contains(&symbol.0.as_str()) {
                     println!("Warning: Logic '{}' might not be fully supported by SeMiTONE yet.", symbol.0);
                 }
             }
@@ -299,17 +300,34 @@ impl<'a> SmtParser<'a> {
 
                 match op {
                     "+" => ArithExpr::Add(args),
-                    "*" => ArithExpr::Mul(args),
+                    "*" => {
+                        if args.iter().all(|a| matches!(a, ArithExpr::Const(_))) {
+                            let mut prod = rug::Rational::from(1);
+                            for arg in args {
+                                if let ArithExpr::Const(c) = arg {
+                                    prod *= c;
+                                }
+                            }
+                            ArithExpr::Const(prod)
+                        } else {
+                            ArithExpr::Mul(args)
+                        }
+                    }
                     "-" => {
                         if args.len() == 1 {
-                            ArithExpr::Neg(Box::new(args.into_iter().next().unwrap()))
+                            let arg = args.into_iter().next().unwrap();
+                            if let ArithExpr::Const(c) = arg { ArithExpr::Const(-c) } else { ArithExpr::Neg(Box::new(arg)) }
                         } else {
                             // Subtraction (a - b - c) -> a + (-b) + (-c)
                             let mut iter = args.into_iter();
                             let first = iter.next().unwrap();
                             let mut sum_args = vec![first];
                             for arg in iter {
-                                sum_args.push(ArithExpr::Neg(Box::new(arg)));
+                                if let ArithExpr::Const(c) = arg {
+                                    sum_args.push(ArithExpr::Const(-c));
+                                } else {
+                                    sum_args.push(ArithExpr::Neg(Box::new(arg)));
+                                }
                             }
                             ArithExpr::Add(sum_args)
                         }
@@ -319,7 +337,26 @@ impl<'a> SmtParser<'a> {
                         let mut iter = args.into_iter();
                         let num = iter.next().unwrap();
                         let den = iter.next().unwrap();
-                        ArithExpr::Div(Box::new(num), Box::new(den))
+                        if let (ArithExpr::Const(n), ArithExpr::Const(d)) = (&num, &den) { ArithExpr::Const(n.clone() / d) } else { ArithExpr::Div(Box::new(num), Box::new(den)) }
+                    }
+                    "div" | "mod" => {
+                        assert_eq!(args.len(), 2, "{} expects exactly two arguments", op);
+                        let mut iter = args.into_iter();
+                        let num = iter.next().unwrap();
+                        let den = iter.next().unwrap();
+
+                        match (&num, &den) {
+                            (ArithExpr::Const(n), ArithExpr::Const(d)) => {
+                                assert!(n.denom() == &rug::Integer::from(1) && d.denom() == &rug::Integer::from(1), "div and mod are only defined for Integers");
+
+                                let (q, r) = euclidean_div_mod(n.numer(), d.numer());
+
+                                if op == "div" { ArithExpr::Const(rug::Rational::from((q, rug::Integer::from(1)))) } else { ArithExpr::Const(rug::Rational::from((r, rug::Integer::from(1)))) }
+                            }
+                            _ => {
+                                unimplemented!("Non-constant div/mod is not implemented yet. Consider using a theory-aware approach for integer division and modulus.");
+                            }
+                        }
                     }
                     _ => panic!("Unsupported arithmetic operator: {}", op),
                 }
@@ -476,6 +513,27 @@ impl<'a> SmtParser<'a> {
             _ => panic!("Unsupported term structure for sort inference"),
         }
     }
+}
+
+fn euclidean_div_mod(a: &rug::Integer, b: &rug::Integer) -> (rug::Integer, rug::Integer) {
+    if *b == 0 {
+        panic!("Division by zero in constant evaluation");
+    }
+
+    let mut q = a.clone() / b;
+    let mut r = a.clone() % b;
+
+    if r < 0 {
+        if *b > 0 {
+            q -= 1;
+            r += b;
+        } else {
+            q += 1;
+            r -= b;
+        }
+    }
+
+    (q, r)
 }
 
 #[cfg(test)]
@@ -639,5 +697,73 @@ mod tests {
             (check-sat)
         ";
         assert!(run_smt_script(script).contains("sat"));
+    }
+
+    #[test]
+    fn test_diophantine_equation_unsat() {
+        let script = "
+            (set-logic QF_LIA)
+            (declare-fun x () Int)
+            (declare-fun y () Int)
+            
+            ; 3x + y = 7
+            (assert (= y (- 7 (* 3 x))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "sat", "There are integer solutions to 3x + y = 7");
+    }
+
+    #[test]
+    fn test_diophantine_equation_unsat_example() {
+        let script = "
+            (set-logic QF_LIA)
+            (declare-fun x () Int)
+            (declare-fun y () Int)
+
+            ; 3x + y = 7
+            (assert (= y (- 7 (* 3 x))))
+            ; 3x + y = 8
+            (assert (= y (- 8 (* 3 x))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat", "There are no integer solutions to the system 3x + y = 7 and 3x + y = 8");
+    }
+
+    #[test]
+    fn test_complex_mixed_unsat() {
+        let script = "
+            (set-logic QF_UFLIRA)
+            (declare-sort U 0)
+            (declare-fun v_0 () Bool)
+            (declare-fun v_1 () Int)
+            (declare-fun v_2 () Real)
+            (declare-fun v_3 () U)
+            (declare-fun v_4 () Int)
+            (declare-fun v_5 () U)
+            (declare-fun v_6 () Int)
+            (declare-fun v_7 () U)
+            (declare-fun v_8 () Int)
+            (declare-fun v_9 () Bool)
+            (declare-fun f_pure (U) U)
+            (declare-fun f_mix_int (Int) U)
+            (declare-fun f_mix_bool (Bool) U)
+            (assert (=> (not v_0) v_9))
+            (assert (or (= (- v_1 v_8) (- v_8 (- 9))) (= (f_mix_int (- 2)) v_7)))
+            (assert (not (= v_2 (+ v_2 v_2))))
+            (assert (or v_9 (and (=> true v_0) (=> v_0 v_0))))
+            (assert v_0)
+            (assert (and (not (and true v_9)) true))
+            (assert (= (- 5 (+ (- 10) v_6)) (+ (* v_1 3) 8)))
+            (assert (and (not (= (- 3) (- 7))) (not (= 5.0 v_2))))
+            (assert (and (not v_9) v_0))
+            (assert v_0)
+            (assert (= 5.0 (* v_2 (- 8.0))))
+            (assert v_0)
+            (assert (or false v_0))
+            (assert true)
+            (assert (=> (not (or true v_0)) (and v_0 (=> false v_0))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat", "The system is unsatisfiable due to the conflicting equations and EUF constraints");
     }
 }
