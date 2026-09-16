@@ -421,12 +421,6 @@ impl ops::Neg for &ArithExpr {
     }
 }
 
-impl AsRef<ArithExpr> for ArithExpr {
-    fn as_ref(&self) -> &ArithExpr {
-        self
-    }
-}
-
 impl fmt::Display for ArithExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

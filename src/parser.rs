@@ -18,10 +18,13 @@ use std::{
 pub struct SmtParser<'a> {
     pub solver: Solver,
     bool_vars: FxHashMap<String, BoolExpr>,
-    real_vars: FxHashMap<String, ArithExpr>,
+    arith_vars: FxHashMap<String, ArithExpr>,
     euf_vars: FxHashMap<String, EufExpr>,
     euf_funcs: FxHashMap<String, usize>,
     custom_sorts: FxHashSet<String>,
+    var_sorts: FxHashMap<String, String>,
+    purified_bool_vars: Vec<(EufExpr, BoolExpr)>,
+    purified_arith_vars: Vec<(EufExpr, ArithExpr, String)>,
     is_unsat: bool,
     writer: &'a mut dyn Write,
 }
@@ -32,10 +35,13 @@ impl<'a> SmtParser<'a> {
         Self {
             solver: Solver::new(),
             bool_vars: FxHashMap::default(),
-            real_vars: FxHashMap::default(),
+            arith_vars: FxHashMap::default(),
             euf_vars: FxHashMap::default(),
             euf_funcs: FxHashMap::default(),
             custom_sorts: FxHashSet::default(),
+            var_sorts: FxHashMap::default(),
+            purified_bool_vars: Vec::new(),
+            purified_arith_vars: Vec::new(),
             is_unsat: false,
             writer,
         }
@@ -95,23 +101,25 @@ impl<'a> SmtParser<'a> {
                     match sort_name.as_str() {
                         "Bool" => {
                             let v = self.solver.smt.new_bool();
-                            self.bool_vars.insert(name, v);
+                            self.bool_vars.insert(name.clone(), v);
                         }
                         "Real" => {
                             let v = self.solver.smt.new_real();
-                            self.real_vars.insert(name, v);
+                            self.arith_vars.insert(name.clone(), v);
+                            self.var_sorts.insert(name, "Real".to_string());
                         }
                         "Int" => {
                             let v = self.solver.smt.new_int();
-                            self.real_vars.insert(name, v);
+                            self.arith_vars.insert(name.clone(), v);
+                            self.var_sorts.insert(name, "Int".to_string());
+                        }
+                        _ if self.custom_sorts.contains(&sort_name) => {
+                            let v = self.solver.smt.new_euf_var();
+                            self.euf_vars.insert(name.to_string(), v);
                         }
                         _ => panic!("Unsupported sort: {}", sort_name),
                     }
                 } else {
-                    if !self.custom_sorts.contains(&sort_name) {
-                        unimplemented!("Parametric sorts are not supported yet. Found sort: {}", sort_name);
-                    }
-
                     let func_id = self.euf_funcs.len();
                     self.euf_funcs.insert(name, func_id);
                 }
@@ -153,7 +161,7 @@ impl<'a> SmtParser<'a> {
                 }
 
                 // Print Real/Integer assignments
-                for (name, var) in &self.real_vars {
+                for (name, var) in &self.arith_vars {
                     if let Some(val) = self.solver.smt.get_arith_val(var) {
                         let Rational::Finite(rat) = val.rational_part() else {
                             writeln!(self.writer, "  (define-fun {} () Real <non-finite>)", name).unwrap();
@@ -283,7 +291,7 @@ impl<'a> SmtParser<'a> {
             },
             concrete::Term::QualIdentifier(id) => {
                 let name = Self::symbol_of_qual_identifier(id);
-                self.real_vars.get(name).cloned().unwrap_or_else(|| panic!("Undeclared arithmetic variable: {}", name))
+                self.arith_vars.get(name).cloned().unwrap_or_else(|| panic!("Undeclared arithmetic variable: {}", name))
             }
             concrete::Term::Application { qual_identifier, arguments } => {
                 let op = Self::symbol_of_qual_identifier(qual_identifier);
@@ -331,8 +339,55 @@ impl<'a> SmtParser<'a> {
 
                 if let Some(&func_id) = self.euf_funcs.get(func_name) {
                     let mut parsed_args = Vec::with_capacity(arguments.len());
+
                     for arg in arguments {
-                        parsed_args.push(Expr::Euf(self.translate_euf_term(arg)));
+                        let generic_expr = self.translate_term(arg);
+
+                        match generic_expr {
+                            Expr::Euf(euf_expr) => {
+                                parsed_args.push(Expr::Euf(euf_expr));
+                            }
+                            Expr::Arith(arith_expr) => {
+                                let fresh_euf_expr = self.solver.smt.new_euf_var();
+                                let sort_type = self.infer_arith_sort(arg).to_owned();
+                                let fresh_arith_expr = if sort_type == "Int" { self.solver.smt.new_int() } else { self.solver.smt.new_real() };
+
+                                let bridge_eq = fresh_arith_expr.eq(&arith_expr);
+                                self.solver.smt.assert(&bridge_eq);
+
+                                for (old_euf, old_arith, old_sort) in &self.purified_arith_vars {
+                                    if old_sort == &sort_type {
+                                        let euf_eq = fresh_euf_expr.eq(old_euf.clone());
+                                        let arith_eq = fresh_arith_expr.eq(old_arith);
+                                        let iff_expr = euf_eq.eq(&arith_eq);
+                                        self.solver.smt.assert(&iff_expr);
+                                    }
+                                }
+
+                                self.purified_arith_vars.push((fresh_euf_expr.clone(), fresh_arith_expr, sort_type.to_string()));
+
+                                parsed_args.push(Expr::Euf(fresh_euf_expr));
+                            }
+                            Expr::Bool(bool_expr) => {
+                                let fresh_euf_expr = self.solver.smt.new_euf_var();
+                                let fresh_bool_expr = self.solver.smt.new_bool();
+
+                                let bridge_eq = fresh_bool_expr.eq(&bool_expr);
+                                self.solver.smt.assert(&bridge_eq);
+
+                                for (old_euf, old_bool) in &self.purified_bool_vars {
+                                    let euf_eq = fresh_euf_expr.eq(old_euf.clone());
+                                    let bool_eq = fresh_bool_expr.eq(old_bool);
+                                    let iff_expr = euf_eq.eq(&bool_eq);
+                                    self.solver.smt.assert(&iff_expr);
+                                }
+
+                                self.purified_bool_vars.push((fresh_euf_expr.clone(), fresh_bool_expr));
+
+                                parsed_args.push(Expr::Euf(fresh_euf_expr));
+                            }
+                            _ => panic!("Unsupported argument type for EUF function: {:?}", generic_expr),
+                        }
                     }
 
                     self.solver.smt.new_euf_app(func_id, parsed_args)
@@ -341,6 +396,18 @@ impl<'a> SmtParser<'a> {
                 }
             }
             _ => panic!("Unsupported EUF term structure"),
+        }
+    }
+
+    fn translate_term(&mut self, term: &concrete::Term) -> Expr {
+        if self.is_bool_term(term) {
+            Expr::Bool(self.translate_bool_term(term))
+        } else if self.is_arith_term(term) {
+            Expr::Arith(self.translate_arith_term(term))
+        } else if self.is_euf_term(term) {
+            Expr::Euf(self.translate_euf_term(term))
+        } else {
+            panic!("Termine misto o sconosciuto non identificabile")
         }
     }
 
@@ -357,5 +424,220 @@ impl<'a> SmtParser<'a> {
             }
             _ => false,
         }
+    }
+
+    fn is_arith_term(&self, term: &concrete::Term) -> bool {
+        match term {
+            concrete::Term::Constant(c) => matches!(c, concrete::Constant::Numeral(_) | concrete::Constant::Decimal(_)),
+            concrete::Term::QualIdentifier(id) => {
+                let name = Self::symbol_of_qual_identifier(id);
+                self.arith_vars.contains_key(name)
+            }
+            concrete::Term::Application { qual_identifier, .. } => {
+                let op = Self::symbol_of_qual_identifier(qual_identifier);
+                matches!(op, "+" | "-" | "*" | "/")
+            }
+            _ => false,
+        }
+    }
+
+    fn is_euf_term(&self, term: &concrete::Term) -> bool {
+        match term {
+            concrete::Term::QualIdentifier(id) => {
+                let name = Self::symbol_of_qual_identifier(id);
+                self.euf_vars.contains_key(name)
+            }
+            concrete::Term::Application { qual_identifier, .. } => {
+                let func_name = Self::symbol_of_qual_identifier(qual_identifier);
+                self.euf_funcs.contains_key(func_name)
+            }
+            _ => false,
+        }
+    }
+
+    fn infer_arith_sort(&self, term: &concrete::Term) -> &str {
+        match term {
+            concrete::Term::Constant(c) => match c {
+                concrete::Constant::Numeral(_) => "Int",
+                concrete::Constant::Decimal(_) => "Real",
+                _ => panic!("Unsupported constant type for sort inference"),
+            },
+            concrete::Term::QualIdentifier(id) => {
+                let name = Self::symbol_of_qual_identifier(id);
+                self.var_sorts.get(name).map(|s| s.as_str()).unwrap_or_else(|| panic!("Undeclared variable for sort inference: {}", name))
+            }
+            concrete::Term::Application { arguments, .. } => {
+                if let Some(first_arg) = arguments.first() {
+                    self.infer_arith_sort(first_arg)
+                } else {
+                    panic!("Cannot infer sort from empty application")
+                }
+            }
+            _ => panic!("Unsupported term structure for sort inference"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_smt_script(script: &str) -> String {
+        let mut output = Vec::new();
+        {
+            let mut parser = SmtParser::new(&mut output);
+            parser.run_str(script);
+        }
+        String::from_utf8(output).expect("Invalid UTF-8 output")
+    }
+
+    #[test]
+    fn test_euf_congruence() {
+        let script = "
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun a () U)
+            (declare-fun b () U)
+            (declare-fun f (U) U)
+            
+            (assert (= a b))
+            (assert (not (= (f a) (f b))))
+            (check-sat)
+        ";
+        let output = run_smt_script(script);
+        assert_eq!(output.trim(), "unsat", "The congruence f(a)=f(b) must be guaranteed");
+    }
+
+    #[test]
+    fn test_euf_transitivity() {
+        let script = "
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun a () U)
+            (declare-fun b () U)
+            (declare-fun c () U)
+            
+            (assert (= a b))
+            (assert (= b c))
+            (assert (not (= a c)))
+            (check-sat)
+        ";
+        let output = run_smt_script(script);
+        assert_eq!(output.trim(), "unsat", "Transitivity of a=b and b=c implies a=c");
+    }
+
+    #[test]
+    fn test_euf_satisfiable_and_model() {
+        let script = "
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun x () U)
+            (declare-fun y () U)
+            
+            (assert (not (= x y)))
+            (check-sat)
+        ";
+        let output = run_smt_script(script);
+        assert!(output.contains("sat"), "The system should be satisfiable");
+    }
+
+    #[test]
+    fn test_euf_push_pop_backtracking() {
+        let script = "
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun a () U)
+            (declare-fun b () U)
+            (declare-fun f (U) U)
+            
+            (push 1)
+                (assert (= a b))
+                (assert (not (= (f a) (f b))))
+                (check-sat) ; This must be unsat
+            (pop 1)
+            
+            (push 1)
+                (assert (= a b))
+                (assert (= (f a) (f b)))
+                (check-sat) ; This must be sat now that the conflict has been popped
+            (pop 1)
+        ";
+        let output = run_smt_script(script);
+        let lines: Vec<&str> = output.trim().lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].trim(), "unsat");
+        assert_eq!(lines[1].trim(), "sat");
+    }
+    #[test]
+
+    fn test_euf_arith_mixed_vars() {
+        let script = "
+            (set-logic QF_UFLIA)
+            (declare-sort U 0)
+            (declare-fun x () Int)
+            (declare-fun y () Int)
+            (declare-fun f (Int) U)
+            
+            (assert (= x y))
+            (assert (not (= (f x) (f y))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat");
+    }
+
+    #[test]
+    fn test_euf_arith_mixed_complex_flattening() {
+        let script = "
+            (set-logic QF_UFLIA)
+            (declare-sort U 0)
+            (declare-fun x () Int)
+            (declare-fun y () Int)
+            (declare-fun f (Int) U)
+            
+            (assert (= x 2))
+            (assert (= y 4))
+            
+            ; (+ x 1) fa 3. (- y 1) fa 3. La disuguaglianza è un assurdo.
+            (assert (not (= (f (+ x 1)) (f (- y 1)))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat");
+    }
+
+    #[test]
+    fn test_euf_bool_mixed_flattening() {
+        let script = "
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun p () Bool)
+            (declare-fun q () Bool)
+            (declare-fun f (Bool) U)
+            
+            ; p e q sono entrambi veri
+            (assert p)
+            (assert q)
+            
+            ; Se sono entrambi veri, p == q. Quindi f(p) deve essere uguale a f(q).
+            (assert (not (= (f p) (f q))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat");
+    }
+
+    #[test]
+    fn test_mixed_satisfiable_model() {
+        let script = "
+            (set-logic QF_UFLIA)
+            (declare-sort U 0)
+            (declare-fun x () Int)
+            (declare-fun y () Int)
+            (declare-fun f (Int) U)
+            
+            (assert (= x 2))
+            (assert (= y 3))
+            (assert (not (= (f x) (f y))))
+            (check-sat)
+        ";
+        assert!(run_smt_script(script).contains("sat"));
     }
 }

@@ -100,27 +100,26 @@ impl SeMiTONE {
     }
 
     /// Allocates a new EUF variable.
-    pub fn new_euf(&mut self) -> EufExpr {
-        let id = self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len()));
-        EufExpr::Var(id)
+    pub fn new_euf_var(&mut self) -> EufExpr {
+        EufExpr::Var(self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len())))
     }
 
     /// Allocates a new EUF function application with the given function ID and arguments.
     pub fn new_euf_app(&mut self, func_id: usize, args: Vec<Expr>) -> EufExpr {
         let mut internal_args = Vec::with_capacity(args.len());
         for arg in &args {
-            if let crate::ast::Expr::Euf(euf_arg) = arg {
+            if let Expr::Euf(euf_arg) = arg {
                 let arg_id = match euf_arg {
                     EufExpr::Var(n) => *n,
                     EufExpr::App(internal_id, _) => *internal_id,
                 };
                 internal_args.push(arg_id);
             } else {
-                unimplemented!("Supporto per funzioni ad argomenti misti non ancora implementato.");
+                panic!("EUF application arguments must be EUF expressions, but got: {:?}", arg);
             }
         }
 
-        let id = self.euf_theory.add_term(crate::euf_theory::Term::App(func_id, internal_args));
+        let id = self.euf_theory.add_term(Term::App(func_id, internal_args));
         EufExpr::App(id, args)
     }
 
