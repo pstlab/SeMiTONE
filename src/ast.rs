@@ -70,12 +70,12 @@ pub enum BoolExpr {
     DlLt(usize, usize, rug::Rational),
     /// A non-strict difference logic constraint.
     DlLe(usize, usize, rug::Rational),
-    /// A strict difference logic constraint.
-    DlGt(usize, usize, rug::Rational),
-    /// A non-strict difference logic constraint.
-    DlGe(usize, usize, rug::Rational),
     /// An equality difference logic constraint.
     DlEq(usize, usize, rug::Rational),
+    /// A non-strict difference logic constraint.
+    DlGe(usize, usize, rug::Rational),
+    /// A strict difference logic constraint.
+    DlGt(usize, usize, rug::Rational),
 }
 
 impl BoolExpr {
@@ -193,11 +193,11 @@ impl fmt::Display for BoolExpr {
             BoolExpr::Ge(a1, a2) => write!(f, "{} ≥ {}", a1, a2),
             BoolExpr::Gt(a1, a2) => write!(f, "{} > {}", a1, a2),
             BoolExpr::Eq(e1, e2) => write!(f, "{} = {}", e1, e2),
-            BoolExpr::DlLt(from, to, bound) => write!(f, "d{} - d{} < {}", from, to, bound),
-            BoolExpr::DlLe(from, to, bound) => write!(f, "d{} - d{} ≤ {}", from, to, bound),
-            BoolExpr::DlGe(from, to, bound) => write!(f, "d{} - d{} ≥ {}", from, to, bound),
-            BoolExpr::DlGt(from, to, bound) => write!(f, "d{} - d{} > {}", from, to, bound),
-            BoolExpr::DlEq(from, to, bound) => write!(f, "d{} - d{} = {}", from, to, bound),
+            BoolExpr::DlLt(from, to, bound) => write!(f, "d{} - d{} < {}", to, from, bound),
+            BoolExpr::DlLe(from, to, bound) => write!(f, "d{} - d{} ≤ {}", to, from, bound),
+            BoolExpr::DlEq(from, to, bound) => write!(f, "d{} - d{} = {}", to, from, bound),
+            BoolExpr::DlGe(from, to, bound) => write!(f, "d{} - d{} ≥ {}", to, from, bound),
+            BoolExpr::DlGt(from, to, bound) => write!(f, "d{} - d{} > {}", to, from, bound),
         }
     }
 }

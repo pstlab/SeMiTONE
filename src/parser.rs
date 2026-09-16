@@ -4,9 +4,9 @@ use crate::{
     solver::Solver,
 };
 use num_traits::ToPrimitive;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smt2parser::{CommandStream, concrete};
 use std::{
-    collections::{HashMap, HashSet},
     fs::File,
     io::{BufReader, Write},
 };
@@ -17,11 +17,11 @@ use std::{
 /// configured output sink.
 pub struct SmtParser<'a> {
     pub solver: Solver,
-    bool_vars: HashMap<String, BoolExpr>,
-    real_vars: HashMap<String, ArithExpr>,
-    euf_vars: HashMap<String, EufExpr>,
-    euf_funcs: HashMap<String, usize>,
-    custom_sorts: HashSet<String>,
+    bool_vars: FxHashMap<String, BoolExpr>,
+    real_vars: FxHashMap<String, ArithExpr>,
+    euf_vars: FxHashMap<String, EufExpr>,
+    euf_funcs: FxHashMap<String, usize>,
+    custom_sorts: FxHashSet<String>,
     is_unsat: bool,
     writer: &'a mut dyn Write,
 }
@@ -31,11 +31,11 @@ impl<'a> SmtParser<'a> {
     pub fn new(writer: &'a mut dyn Write) -> Self {
         Self {
             solver: Solver::new(),
-            bool_vars: HashMap::new(),
-            real_vars: HashMap::new(),
-            euf_vars: HashMap::new(),
-            euf_funcs: HashMap::new(),
-            custom_sorts: HashSet::new(),
+            bool_vars: FxHashMap::default(),
+            real_vars: FxHashMap::default(),
+            euf_vars: FxHashMap::default(),
+            euf_funcs: FxHashMap::default(),
+            custom_sorts: FxHashSet::default(),
             is_unsat: false,
             writer,
         }

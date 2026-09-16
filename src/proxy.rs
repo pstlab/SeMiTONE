@@ -1,14 +1,16 @@
+use rustc_hash::FxHashMap;
+
 use crate::{rational::InfRational, sat_solver::Lit};
 use std::collections::HashMap;
 
 pub struct ProxyRegistry {
-    pub proxy_to_constraint: HashMap<Lit, TheoryConstraint>,
-    pub constraint_to_proxy: HashMap<TheoryConstraint, Lit>,
+    pub proxy_to_constraint: FxHashMap<Lit, TheoryConstraint>,
+    pub constraint_to_proxy: FxHashMap<TheoryConstraint, Lit>,
 }
 
 impl ProxyRegistry {
     pub fn new() -> Self {
-        Self { proxy_to_constraint: HashMap::new(), constraint_to_proxy: HashMap::new() }
+        Self { proxy_to_constraint: HashMap::default(), constraint_to_proxy: HashMap::default() }
     }
 
     pub fn get_proxy(&self, constraint: &TheoryConstraint) -> Option<&Lit> {

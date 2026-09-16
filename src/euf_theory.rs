@@ -1,3 +1,5 @@
+use rustc_hash::FxHashMap;
+
 use crate::Lit;
 use std::collections::HashSet;
 
@@ -7,11 +9,19 @@ pub(super) enum Term {
     App(usize, Vec<usize>),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Signature {
+    f: usize,
+    args: Vec<usize>,
+}
+
 #[derive(Clone)]
 enum EufUndoOp {
     Merged { child: usize, old_size: usize, parent: usize },
     AppendedUseList { parent: usize, count: usize },
     ProofRerooted { changes: Vec<(usize, Option<ProofEdge>)> },
+    SigInserted { sig: Signature },
+    SigRemoved { sig: Signature, term: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +34,7 @@ pub(super) struct EufTheory {
     parents: Vec<usize>,
     sizes: Vec<usize>,
     pub(super) terms: Vec<Term>,
+    sig_table: FxHashMap<Signature, usize>,
     use_list: Vec<Vec<usize>>,
     pending_merges: Vec<(usize, usize)>,
     undo_trail: Vec<EufUndoOp>,
@@ -39,6 +50,7 @@ impl EufTheory {
             parents: Vec::new(),
             sizes: Vec::new(),
             terms: Vec::new(),
+            sig_table: FxHashMap::default(),
             use_list: Vec::new(),
             pending_merges: Vec::new(),
             undo_trail: Vec::new(),
@@ -64,6 +76,9 @@ impl EufTheory {
         }
 
         self.terms.push(term);
+        if let Some(sig) = self.signature(id) {
+            self.sig_table.insert(sig, id);
+        }
         id
     }
 
@@ -72,27 +87,6 @@ impl EufTheory {
             term = self.parents[term];
         }
         term
-    }
-
-    fn are_congruent(&self, t1: usize, t2: usize) -> bool {
-        if t1 == t2 {
-            return true;
-        }
-
-        match (&self.terms[t1], &self.terms[t2]) {
-            (Term::App(f1, args1), Term::App(f2, args2)) => {
-                if f1 != f2 || args1.len() != args2.len() {
-                    return false;
-                }
-                for i in 0..args1.len() {
-                    if self.find(args1[i]) != self.find(args2[i]) {
-                        return false;
-                    }
-                }
-                true
-            }
-            _ => false,
-        }
     }
 
     pub(super) fn merge(&mut self, t1: usize, t2: usize, reason: Option<Lit>) -> bool {
@@ -105,23 +99,30 @@ impl EufTheory {
 
         let (parent, child) = if self.sizes[root1] >= self.sizes[root2] { (root1, root2) } else { (root2, root1) };
 
+        let child_uses = self.use_list[child].clone();
+
+        for &u in &child_uses {
+            if let Some(old_sig) = self.signature(u) {
+                self.sig_table.remove(&old_sig);
+                self.undo_trail.push(EufUndoOp::SigRemoved { sig: old_sig, term: u });
+            }
+        }
+
         self.undo_trail.push(EufUndoOp::Merged { child, old_size: self.sizes[parent], parent });
         self.parents[child] = parent;
         self.sizes[parent] += self.sizes[child];
 
-        // The proof tree must record the actual asserted edge (t1 -> t2), not the union-find
-        // root/child choice, otherwise `explain` can lose intermediate reasons on later merges.
         let changes = self.reroot(t1);
         self.undo_trail.push(EufUndoOp::ProofRerooted { changes });
         self.proof_tree[t1] = Some(ProofEdge { target: t2, reason });
 
-        let child_uses = self.use_list[child].clone();
-        let parent_uses = self.use_list[parent].clone();
-
-        for &u1 in &child_uses {
-            for &u2 in &parent_uses {
-                if self.are_congruent(u1, u2) {
-                    self.pending_merges.push((u1, u2));
+        for &u in &child_uses {
+            if let Some(new_sig) = self.signature(u) {
+                if let Some(&existing_term) = self.sig_table.get(&new_sig) {
+                    self.pending_merges.push((u, existing_term));
+                } else {
+                    self.sig_table.insert(new_sig.clone(), u);
+                    self.undo_trail.push(EufUndoOp::SigInserted { sig: new_sig });
                 }
             }
         }
@@ -214,6 +215,12 @@ impl EufTheory {
                         self.proof_tree[node] = old_edge;
                     }
                 }
+                EufUndoOp::SigInserted { sig } => {
+                    self.sig_table.remove(&sig);
+                }
+                EufUndoOp::SigRemoved { sig, term } => {
+                    self.sig_table.insert(sig, term);
+                }
             }
         }
 
@@ -265,6 +272,10 @@ impl EufTheory {
             }
             curr = edge.target;
         }
+    }
+
+    fn signature(&self, term_id: usize) -> Option<Signature> {
+        if let Term::App(f, ref args) = self.terms[term_id] { Some(Signature { f, args: args.iter().map(|&a| self.find(a)).collect() }) } else { None }
     }
 }
 
