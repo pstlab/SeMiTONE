@@ -1069,15 +1069,17 @@ impl SeMiTONE {
     pub fn check_ints(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         if let Err((var, val)) = self.lra_theory.check_ints() {
             println!("Integer variable {} has fractional value {}", var, val);
-            let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
 
-            if let Some((cut_row, f0)) = self.lra_theory.generate_gomory_cut(var) {
+            if let Some((cut_row, cut_rhs)) = self.lra_theory.new_gomory_cut() {
                 let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
-                let bound = InfRational::new(Rational::Finite(f0), rug::Rational::from(0));
+                let bound = InfRational::new(Rational::Finite(cut_rhs), rug::Rational::from(0));
                 let cut_lit = self.get_or_create_proxy(TheoryConstraint::LraLb(cut_slack, bound));
 
+                println!("Generated global Gomory cut!");
                 let lemma = vec![cut_lit];
-                return Err((base_level, lemma));
+
+                let current_level = self.sat_solver.decision_level();
+                return Err((current_level, lemma));
             }
 
             let Rational::Finite(inner_frac) = val.rational_part() else {

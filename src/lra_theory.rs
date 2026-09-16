@@ -320,100 +320,38 @@ impl LraTheory {
         Ok(())
     }
 
-    /// Returns the fractional part of a rational number.
-    /// The fractional part is defined as the difference between the number and its floor.
-    fn fract_part(val: &rug::Rational) -> rug::Rational {
-        let mut floor = val.clone();
-        floor.floor_mut();
-        val.clone() - floor
-    }
-
-    /// Generates a Gomory cut for the given basic variable if it has a fractional value.
-    pub(super) fn generate_gomory_cut(&mut self, basic_var: usize) -> Option<(SparseRow, rug::Rational)> {
-        let Rational::Finite(val) = self.value(basic_var).rational_part() else {
-            return None;
-        };
-        let f0 = Self::fract_part(val);
-
-        if f0.is_zero() {
-            return None;
-        }
-
-        let row = self.tableau.get(&basic_var)?;
-        let mut cut_row = SparseRow::new();
-        let mut cut_rhs = f0.clone();
-
-        for (nb_var, coeff) in row.iter() {
-            if !self.ints[*nb_var] {
-                return None;
-            }
-
-            let Rational::Finite(nb_val) = self.value(*nb_var).rational_part() else {
-                return None;
-            };
-            let lb = self.lb(*nb_var);
-            let ub = self.ub(*nb_var);
-
-            let (a_j, bound_val, is_lower) = match lb.rational_part() {
-                Rational::Finite(lb_val) if nb_val == lb_val => (coeff.clone(), nb_val.clone(), true),
-                _ => match ub.rational_part() {
-                    Rational::Finite(ub_val) if nb_val == ub_val => (-coeff.clone(), nb_val.clone(), false),
-                    _ => return None,
-                },
-            };
-
-            let fj = Self::fract_part(&a_j);
-            if !fj.is_zero() {
-                if is_lower {
-                    // fj * (x - L) >= f0  =>  fj * x >= f0 + fj * L
-                    cut_row.add_coeff(*nb_var, &fj);
-                    cut_rhs += fj.clone() * bound_val;
-                } else {
-                    // fj * (U - x) >= f0  =>  -fj * x >= f0 - fj * U
-                    let neg_fj = -fj.clone();
-                    cut_row.add_coeff(*nb_var, &neg_fj);
-                    cut_rhs -= fj.clone() * bound_val;
-                }
-            }
-        }
-
-        (!cut_row.is_empty()).then_some((cut_row, cut_rhs))
-    }
-
     pub(super) fn new_gomory_cut(&self) -> Option<(SparseRow, rug::Rational)> {
         for (b_var, row) in &self.tableau {
-            let val = self.value(*b_var);
-            if !self.ints[*b_var] || !val.infinitesimal_part().is_zero() {
+            if !self.ints[*b_var] {
                 continue;
             }
-            let Rational::Finite(rat_val) = val.rational_part() else {
+
+            let val = self.value(*b_var);
+            let rat_part = val.rational_part();
+
+            let Rational::Finite(rat_val) = rat_part else {
                 continue;
             };
+
             if rat_val.is_integer() {
                 continue;
             }
+
             let mut floor_val = rat_val.clone();
             floor_val.floor_mut();
             let f0 = rat_val.clone() - floor_val;
 
-            let one_minus_f0 = rug::Rational::from(1) - &f0;
-            let mut cut_rhs = rug::Rational::from(1);
-            let mut cut_row = SparseRow::new();
+            if f0.is_zero() || f0 == 1 {
+                continue;
+            }
+
             let mut valid_row = true;
+            let mut cut_row = SparseRow::new();
+            let mut cut_rhs = rug::Rational::from(1);
+            let one_minus_f0 = rug::Rational::from(1) - &f0;
 
             for (nb_var, nb_coeff) in row.iter() {
                 let nb_val = self.value(*nb_var);
-                if !nb_val.infinitesimal_part().is_zero() {
-                    valid_row = false;
-                    break;
-                }
-
-                let nb_rat_part = nb_val.rational_part();
-                let Rational::Finite(nb_rat_val) = nb_rat_part else {
-                    valid_row = false;
-                    break;
-                };
-
                 let lb = self.lb(*nb_var);
                 let ub = self.ub(*nb_var);
 
@@ -425,56 +363,41 @@ impl LraTheory {
                     break;
                 }
 
-                let is_int_var = self.ints[*nb_var];
-                let mut cut_coeff = rug::Rational::new();
+                let nb_rat_part = nb_val.rational_part();
+                let Rational::Finite(nb_rat_val) = nb_rat_part else {
+                    valid_row = false;
+                    break;
+                };
 
-                if at_lower {
+                let is_int_var = self.ints[*nb_var];
+                let cut_coeff = if at_lower {
                     if !is_int_var {
-                        if *nb_coeff >= 0 {
-                            cut_coeff = nb_coeff.clone() / &one_minus_f0;
-                        } else {
-                            cut_coeff = -nb_coeff.clone() / &f0;
-                        }
+                        if *nb_coeff >= 0 { nb_coeff.clone() / &one_minus_f0 } else { -nb_coeff.clone() / &f0 }
                     } else {
                         let mut floor_aj = nb_coeff.clone();
                         floor_aj.floor_mut();
                         let fj = nb_coeff.clone() - floor_aj;
 
-                        if fj <= one_minus_f0 {
-                            cut_coeff = fj / &one_minus_f0;
-                        } else {
-                            cut_coeff = (rug::Rational::from(1) - fj) / &f0;
-                        }
-                    }
-
-                    if !cut_coeff.is_zero() {
-                        let term = rug::Rational::from(&cut_coeff * nb_rat_val);
-                        cut_rhs += term;
-                        cut_row.add_coeff(*nb_var, &cut_coeff);
+                        if fj <= one_minus_f0 { fj / &one_minus_f0 } else { (rug::Rational::from(1) - fj) / &f0 }
                     }
                 } else {
                     if !is_int_var {
-                        if *nb_coeff >= 0 {
-                            cut_coeff = nb_coeff.clone() / &f0;
-                        } else {
-                            cut_coeff = -nb_coeff.clone() / &one_minus_f0;
-                        }
+                        if *nb_coeff >= 0 { nb_coeff.clone() / &f0 } else { -nb_coeff.clone() / &one_minus_f0 }
                     } else {
                         let mut floor_aj = nb_coeff.clone();
                         floor_aj.floor_mut();
                         let fj = nb_coeff.clone() - floor_aj;
 
-                        if fj <= f0 {
-                            cut_coeff = fj / &f0;
-                        } else {
-                            cut_coeff = (rug::Rational::from(1) - fj) / &one_minus_f0;
-                        }
+                        if fj <= f0 { fj / &f0 } else { (rug::Rational::from(1) - fj) / &one_minus_f0 }
                     }
-
-                    if !cut_coeff.is_zero() {
-                        let term = rug::Rational::from(&cut_coeff * nb_rat_val);
+                };
+                if !cut_coeff.is_zero() {
+                    let term = rug::Rational::from(&cut_coeff * nb_rat_val);
+                    if at_lower {
+                        cut_rhs += term;
+                        cut_row.add_coeff(*nb_var, &cut_coeff);
+                    } else {
                         cut_rhs -= term;
-
                         let neg_coeff = -cut_coeff;
                         cut_row.add_coeff(*nb_var, &neg_coeff);
                     }
