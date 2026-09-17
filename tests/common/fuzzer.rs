@@ -73,16 +73,17 @@ impl SmtFuzzer {
 
         match target_sort {
             Sort::Bool => {
-                let ops = ["and", "or", "not", "=>", "="];
+                let ops = ["and", "or", "not", "=>", "=", "<", "<=", ">", ">="];
                 let op = ops.choose(rng).unwrap();
 
                 if *op == "not" {
                     format!("(not {})", self.generate_term(rng, Sort::Bool, depth - 1))
-                } else if *op == "=" {
-                    let cmp_sort = *[Sort::Int, Sort::Real, Sort::U].choose(rng).unwrap();
+                } else if ["=", "<", "<=", ">", ">="].contains(op) {
+                    let cmp_sort = if *op == "=" { *[Sort::Int, Sort::Real, Sort::U].choose(rng).unwrap() } else { *[Sort::Int, Sort::Real].choose(rng).unwrap() };
+
                     let left = self.generate_term(rng, cmp_sort, depth - 1);
                     let right = self.generate_term(rng, cmp_sort, depth - 1);
-                    format!("(= {} {})", left, right)
+                    format!("({} {} {})", op, left, right)
                 } else {
                     let left = self.generate_term(rng, Sort::Bool, depth - 1);
                     let right = self.generate_term(rng, Sort::Bool, depth - 1);

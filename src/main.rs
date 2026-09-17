@@ -1,12 +1,16 @@
 use semitone::parser::SmtParser;
 use std::env;
 use std::io::{self, Read};
+use tracing::{Level, error, subscriber};
 
 fn main() {
+    let subscriber = tracing_subscriber::fmt().with_max_level(Level::WARN).finish();
+    subscriber::set_global_default(subscriber).expect("Failed to set global default subscriber");
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: semitone <file.smt2 | ->");
+        error!("Usage: semitone <file.smt2 | ->");
         std::process::exit(1);
     }
 

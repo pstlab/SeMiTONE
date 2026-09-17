@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::{BufReader, Write},
 };
+use tracing::{error, warn};
 
 /// SMT-LIB parser built on top of the solver.
 ///
@@ -58,7 +59,7 @@ impl<'a> SmtParser<'a> {
         for command in stream {
             match command {
                 Ok(cmd) => self.execute_command(cmd),
-                Err(e) => eprintln!("Parser error: {:?}", e),
+                Err(e) => error!("Parser error: {:?}", e),
             }
         }
     }
@@ -72,7 +73,7 @@ impl<'a> SmtParser<'a> {
         for command in stream {
             match command {
                 Ok(cmd) => self.execute_command(cmd),
-                Err(e) => eprintln!("Parser error: {:?}", e),
+                Err(e) => error!("Parser error: {:?}", e),
             }
         }
     }
@@ -82,7 +83,7 @@ impl<'a> SmtParser<'a> {
             concrete::Command::SetLogic { symbol } => {
                 let supported_logics = ["QF_LRA", "QF_LIA", "QF_UF", "QF_UFLRA", "QF_UFLIA", "QF_UFLIRA"];
                 if !supported_logics.contains(&symbol.0.as_str()) {
-                    println!("Warning: Logic '{}' might not be fully supported by SeMiTONE yet.", symbol.0);
+                    warn!("Warning: Logic '{}' might not be fully supported by SeMiTONE yet.", symbol.0);
                 }
             }
             concrete::Command::DeclareSort { symbol, arity } => {
@@ -730,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn test_complex_mixed_sat() {
+    fn test_simpler_mixed_sat() {
         let script = "
             (set-logic QF_UFLIRA)
             (declare-sort U 0)
@@ -764,7 +765,45 @@ mod tests {
             (assert (=> (not (or true v_0)) (and v_0 (=> false v_0))))
             (check-sat)
         ";
-        assert_eq!(run_smt_script(script).trim(), "sat", "The complex mixed system should be satisfiable");
+        assert_eq!(run_smt_script(script).trim(), "sat", "The simpler mixed system should be satisfiable");
+    }
+
+    #[test]
+    fn test_harder_mixed_sat() {
+        let script = "
+            (set-logic QF_UFLIRA)
+            (declare-sort U 0)
+            (declare-fun v_0 () Bool)
+            (declare-fun v_1 () Int)
+            (declare-fun v_2 () Real)
+            (declare-fun v_3 () U)
+            (declare-fun v_4 () U)
+            (declare-fun v_5 () U)
+            (declare-fun v_6 () Bool)
+            (declare-fun v_7 () U)
+            (declare-fun v_8 () Int)
+            (declare-fun v_9 () Real)
+            (declare-fun f_pure (U) U)
+            (declare-fun f_mix_int (Int) U)
+            (declare-fun f_mix_bool (Bool) U)
+            (assert (< v_1 (- (* (- 9) v_8) (- 4))))
+            (assert v_6)
+            (assert (or v_0 (= (+ 7.0 v_2) 3.0)))
+            (assert (or (>= (+ (- 8.0) 0.0) 1.0) (not (< 6.0 6.0))))
+            (assert (>= 5 (+ (- (- 10) 1) (+ v_8 (- 7)))))
+            (assert (> (- (- v_1 2) v_8) (* (- 4 1) 5)))
+            (assert (= v_2 (* (- 3.0) (- v_2 v_9))))
+            (assert v_0)
+            (assert (not (< (- v_1 (- 8)) (- v_8 0))))
+            (assert v_0)
+            (assert (= (f_mix_int (- 4 (- 4))) (f_mix_bool (>= 6.0 v_2))))
+            (assert (< v_9 (- (- v_9 v_2) (- 3.0 9.0))))
+            (assert (and (<= 1.0 v_9) (>= (- v_1 6) (+ 6 (- 4)))))
+            (assert (=> v_0 v_6))
+            (assert (<= (- 3) (- (* 0 (- 1)) (- 2 v_1))))
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "sat", "The harder mixed system should be satisfiable");
     }
 
     #[test]

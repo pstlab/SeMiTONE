@@ -6,6 +6,7 @@ use crate::{
 use rug::{Assign, Rational as RugRational};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::BTreeMap, mem};
+use tracing::trace;
 
 pub(super) struct LraTheory {
     ints: Vec<bool>,                                      // true = integer variable, false = real variable
@@ -46,6 +47,7 @@ impl LraTheory {
 
     fn mk_var(&mut self, is_int: bool) -> usize {
         let var = self.reals.len();
+        trace!("Created new {} variable with index {}", if is_int { "int" } else { "real" }, var);
         self.ints.push(is_int);
         self.reals.push(Self::zero());
         self.lbs.push((None, Self::negative_inf()));
@@ -116,6 +118,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: usize, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
+        trace!("[{:?}] Setting lower bound of variable {} to {}", lit, var, new_lb);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_lb <= self.lb(var) {
@@ -137,6 +140,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: usize, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
+        trace!("[{:?}] Setting upper bound of variable {} to {}", lit, var, new_ub);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {

@@ -32,6 +32,7 @@ use crate::{
 };
 use rug::Assign;
 pub use sat_solver::Lit;
+use tracing::trace;
 
 /// Main solver entry point for propositional, linear arithmetic, and enum constraints.
 ///
@@ -188,26 +189,41 @@ impl SeMiTONE {
                     return if polarity { is_sat } else { !is_sat };
                 }
 
-                let (is_upper_bound, eps_val) = match (expr, polarity) {
-                    (BoolExpr::Lt(_, _), true) => (true, rug::Rational::from(-1)),
-                    (BoolExpr::Lt(_, _), false) => (false, rug::Rational::from(0)),
-                    (BoolExpr::Le(_, _), true) => (true, rug::Rational::from(0)),
-                    (BoolExpr::Le(_, _), false) => (false, rug::Rational::from(1)),
-                    (BoolExpr::Ge(_, _), true) => (false, rug::Rational::from(0)),
-                    (BoolExpr::Ge(_, _), false) => (true, rug::Rational::from(-1)),
-                    (BoolExpr::Gt(_, _), true) => (false, rug::Rational::from(1)),
-                    (BoolExpr::Gt(_, _), false) => (true, rug::Rational::from(0)),
+                let (is_upper_bound, is_strict) = match (expr, polarity) {
+                    (BoolExpr::Lt(_, _), true) => (true, true),
+                    (BoolExpr::Lt(_, _), false) => (false, false),
+                    (BoolExpr::Le(_, _), true) => (true, false),
+                    (BoolExpr::Le(_, _), false) => (false, true),
+                    (BoolExpr::Ge(_, _), true) => (false, false),
+                    (BoolExpr::Ge(_, _), false) => (true, true),
+                    (BoolExpr::Gt(_, _), true) => (false, true),
+                    (BoolExpr::Gt(_, _), false) => (true, false),
                     _ => unreachable!(),
                 };
 
-                let bound = InfRational::new(Rational::Finite(-const_term), eps_val);
-
                 if vars.len() == 1 {
                     let (var, coeff) = vars.iter().next().unwrap();
-                    let final_bound = bound / coeff.clone();
-                    if is_upper_bound == coeff.is_positive() { self.lra_theory.set_ub(None, *var, final_bound).is_ok() } else { self.lra_theory.set_lb(None, *var, final_bound).is_ok() }
+                    let is_int = self.lra_theory.is_int_var(*var);
+
+                    let (num_shift, eps_shift) = if is_strict {
+                        if is_int { (if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }, rug::Rational::from(0)) } else { (rug::Rational::from(0), if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }) }
+                    } else {
+                        (rug::Rational::from(0), rug::Rational::from(0))
+                    };
+
+                    let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
+                    if is_upper_bound == coeff.is_positive() { self.lra_theory.set_ub(None, *var, bound).is_ok() } else { self.lra_theory.set_lb(None, *var, bound).is_ok() }
                 } else {
                     let slack = self.lra_theory.get_or_create_slack(vars);
+                    let is_int = self.lra_theory.is_int_var(slack);
+
+                    let (num_shift, eps_shift) = if is_strict {
+                        if is_int { (if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }, rug::Rational::from(0)) } else { (rug::Rational::from(0), if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }) }
+                    } else {
+                        (rug::Rational::from(0), rug::Rational::from(0))
+                    };
+
+                    let bound = InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift);
                     if is_upper_bound { self.lra_theory.set_ub(None, slack, bound).is_ok() } else { self.lra_theory.set_lb(None, slack, bound).is_ok() }
                 }
             }
@@ -1100,7 +1116,7 @@ impl SeMiTONE {
     /// a generated Gomory cut or a branching disjunction for branch-and-bound.
     pub fn check_ints(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         if let Err((var, val)) = self.lra_theory.check_ints() {
-            println!("Integer variable {} has fractional value {}", var, val);
+            trace!("Integer variable {} has fractional value {}", var, val);
 
             if let Some((cut_row, cut_rhs, explanation_bounds)) = self.lra_theory.new_gomory_cut() {
                 let cut_slack = self.lra_theory.get_or_create_slack(cut_row);
@@ -1114,7 +1130,7 @@ impl SeMiTONE {
                 }
                 lemma.push(cut_lit);
 
-                println!("Generated global Gomory cut with {} dependencies!", lemma.len() - 1);
+                trace!("Generated global Gomory cut with {} dependencies!", lemma.len() - 1);
 
                 let current_level = self.sat_solver.decision_level();
                 return Err((current_level, lemma));
@@ -1140,7 +1156,7 @@ impl SeMiTONE {
 
             let ub = InfRational::new(Rational::Finite(floor_val), rug::Rational::from(0));
             let lb = InfRational::new(Rational::Finite(ceil_val), rug::Rational::from(0));
-            println!("Branching on variable {}: x <= {} or x >= {}", var, ub, lb);
+            trace!("Branching on variable {}: x <= {} or x >= {}", var, ub, lb);
 
             let lit_ub = self.get_or_create_proxy(TheoryConstraint::LraUb(var, ub));
             let lit_lb = self.get_or_create_proxy(TheoryConstraint::LraLb(var, lb));

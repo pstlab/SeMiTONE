@@ -6,6 +6,7 @@ use semitone::parser::SmtParser;
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
+use tracing::info;
 
 fn run_z3_oracle(script: &str) -> String {
     let mut child = Command::new("z3").args(&["-in", "-T:10"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("Failed to spawn Z3 process");
@@ -30,7 +31,7 @@ fn test_no_crashes_on_random_inputs() {
 
     for _ in 0..1000 {
         let script = fuzzer.generate_script(&mut rng, 20);
-        println!("Fuzzing with script:\n{}", script);
+        info!("Fuzzing with script:\n{}", script);
 
         let mut sink = std::io::sink();
         let mut runner = SmtParser::new(&mut sink);
