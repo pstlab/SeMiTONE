@@ -766,4 +766,42 @@ mod tests {
         ";
         assert_eq!(run_smt_script(script).trim(), "sat", "The complex mixed system should be satisfiable");
     }
+
+    #[test]
+    fn test_complex_mixed_unsat() {
+        let script = "
+            (set-logic QF_UFLIRA)
+            (declare-sort U 0)
+            (declare-fun v_0 () Bool)
+            (declare-fun v_1 () Int)
+            (declare-fun v_2 () Real)
+            (declare-fun v_3 () U)
+            (declare-fun v_4 () U)
+            (declare-fun v_5 () Int)
+            (declare-fun v_6 () U)
+            (declare-fun v_7 () Bool)
+            (declare-fun v_8 () U)
+            (declare-fun v_9 () Real)
+            (declare-fun f_pure (U) U)
+            (declare-fun f_mix_int (Int) U)
+            (declare-fun f_mix_bool (Bool) U)
+            (assert (= (- (- 3) (* v_1 2)) v_5))
+            (assert v_7)
+            (assert v_7)
+            (assert (= (f_mix_bool (= 4 (- 6))) (f_pure (f_mix_bool true))))
+            (assert (or (=> (not v_0) (or v_0 v_0)) (= v_9 (+ v_2 9.0))))
+            (assert (not (= (f_pure v_6) (f_pure v_6))))
+            (assert v_7)
+            (assert true)
+            (assert v_7)
+            (assert true)
+            (assert (=> (=> (or true true) (= v_1 v_5)) (or (or true v_7) true)))
+            (assert true)
+            (assert (=> false (=> (or v_0 true) (and v_0 true))))
+            (assert (or (=> (=> v_0 v_0) (= v_2 (- 8.0))) false))
+            (assert true)
+            (check-sat)
+        ";
+        assert_eq!(run_smt_script(script).trim(), "unsat", "The complex mixed system should be unsatisfiable");
+    }
 }

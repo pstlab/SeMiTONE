@@ -729,10 +729,24 @@ impl SeMiTONE {
 
             if let Some(constraint) = self.registry.get_constraint(lit).or_else(|| self.registry.get_constraint(!lit)) {
                 let theory_result = match (constraint, lit.sign()) {
-                    (TheoryConstraint::LraUb(var, bound), false) => self.lra_theory.set_ub(Some(lit), *var, bound.clone()),
-                    (TheoryConstraint::LraLb(var, bound), true) => self.lra_theory.set_ub(Some(lit), *var, InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_positive() { rug::Rational::from(0) } else { rug::Rational::from(-1) })),
                     (TheoryConstraint::LraLb(var, bound), false) => self.lra_theory.set_lb(Some(lit), *var, bound.clone()),
-                    (TheoryConstraint::LraUb(var, bound), true) => self.lra_theory.set_lb(Some(lit), *var, InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_negative() { rug::Rational::from(0) } else { rug::Rational::from(1) })),
+                    (TheoryConstraint::LraLb(var, bound), true) => {
+                        let new_bound = if self.lra_theory.is_int_var(*var) {
+                            InfRational::new(bound.rational_part().clone() - Rational::from(1), rug::Rational::from(0))
+                        } else {
+                            InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_positive() { rug::Rational::from(0) } else { rug::Rational::from(-1) })
+                        };
+                        self.lra_theory.set_ub(Some(lit), *var, new_bound)
+                    }
+                    (TheoryConstraint::LraUb(var, bound), false) => self.lra_theory.set_ub(Some(lit), *var, bound.clone()),
+                    (TheoryConstraint::LraUb(var, bound), true) => {
+                        let new_bound = if self.lra_theory.is_int_var(*var) {
+                            InfRational::new(bound.rational_part().clone() + Rational::from(1), rug::Rational::from(0))
+                        } else {
+                            InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_negative() { rug::Rational::from(0) } else { rug::Rational::from(1) })
+                        };
+                        self.lra_theory.set_lb(Some(lit), *var, new_bound)
+                    }
                     (TheoryConstraint::EnumEq(var, val), false) => self.enum_theory.set_eq(Some(lit), *var, *val),
                     (TheoryConstraint::EnumEq(var, val), true) => self.enum_theory.set_neq(Some(lit), *var, *val),
                     (TheoryConstraint::DlLeq(from, to, bound), false) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect()),
