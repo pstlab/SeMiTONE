@@ -77,7 +77,11 @@ impl EufTheory {
 
         self.terms.push(term);
         if let Some(sig) = self.signature(id) {
-            self.sig_table.insert(sig, id);
+            if let Some(&existing_term) = self.sig_table.get(&sig) {
+                self.pending_merges.push((id, existing_term));
+            } else {
+                self.sig_table.insert(sig, id);
+            }
         }
         id
     }

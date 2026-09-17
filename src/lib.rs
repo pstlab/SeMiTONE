@@ -768,7 +768,10 @@ impl SeMiTONE {
                         self.euf_theory.propagate_congruences();
                         self.euf_theory.check_disequalities()
                     }
-                    (TheoryConstraint::EufEq(t1, t2), true) => self.euf_theory.assert_disequality(*t1, *t2, lit),
+                    (TheoryConstraint::EufEq(t1, t2), true) => {
+                        self.euf_theory.propagate_congruences();
+                        self.euf_theory.assert_disequality(*t1, *t2, lit)
+                    }
                 };
 
                 if let Err(lemma) = theory_result {
