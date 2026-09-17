@@ -25,7 +25,7 @@ use crate::{
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
     euf_theory::{EufTheory, Term},
-    lra_theory::{LraTheory, SparseRow},
+    lra_theory::{LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
     sat_solver::SatSolver,
@@ -204,26 +204,30 @@ impl SeMiTONE {
                 if vars.len() == 1 {
                     let (var, coeff) = vars.iter().next().unwrap();
                     let is_int = self.lra_theory.is_int_var(*var);
+                    let is_upper_for_var = is_upper_bound == coeff.is_positive();
 
-                    let (num_shift, eps_shift) = if is_strict {
-                        if is_int { (if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }, rug::Rational::from(0)) } else { (rug::Rational::from(0), if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }) }
+                    let bound = if is_int {
+                        let val = -const_term / coeff.clone();
+                        let tight_val = tighten_int_bound(val, is_upper_for_var, is_strict);
+                        InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
                     } else {
-                        (rug::Rational::from(0), rug::Rational::from(0))
+                        let eps_shift = if is_strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
+                        InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
                     };
 
-                    let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
-                    if is_upper_bound == coeff.is_positive() { self.lra_theory.set_ub(None, *var, bound).is_ok() } else { self.lra_theory.set_lb(None, *var, bound).is_ok() }
+                    if is_upper_for_var { self.lra_theory.set_ub(None, *var, bound).is_ok() } else { self.lra_theory.set_lb(None, *var, bound).is_ok() }
                 } else {
                     let slack = self.lra_theory.get_or_create_slack(vars);
                     let is_int = self.lra_theory.is_int_var(slack);
 
-                    let (num_shift, eps_shift) = if is_strict {
-                        if is_int { (if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }, rug::Rational::from(0)) } else { (rug::Rational::from(0), if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) }) }
+                    let bound = if is_int {
+                        let tight_val = tighten_int_bound(-const_term, is_upper_bound, is_strict);
+                        InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
                     } else {
-                        (rug::Rational::from(0), rug::Rational::from(0))
+                        let eps_shift = if is_strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
+                        InfRational::new(Rational::Finite(-const_term), eps_shift)
                     };
 
-                    let bound = InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift);
                     if is_upper_bound { self.lra_theory.set_ub(None, slack, bound).is_ok() } else { self.lra_theory.set_lb(None, slack, bound).is_ok() }
                 }
             }
@@ -455,20 +459,33 @@ impl SeMiTONE {
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
                 let is_int = self.lra_theory.is_int_var(*var);
+                let is_upper_bound = coeff.is_positive();
 
-                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(-1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(-1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+                let bound = if is_int {
+                    let val = -const_term / coeff.clone();
+                    let tight_val = tighten_int_bound(val, is_upper_bound, strict);
+                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                } else {
+                    let eps_shift = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
+                    InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
+                };
 
-                let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
-                let bound = if coeff.is_positive() { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
+                let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
             _ => {
                 let slack = self.lra_theory.get_or_create_slack(vars);
                 let is_int = self.lra_theory.is_int_var(slack);
 
-                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(-1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(-1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+                let bound = if is_int {
+                    let tight_val = tighten_int_bound(-const_term, true, strict);
+                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                } else {
+                    let eps_shift = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
+                    InfRational::new(Rational::Finite(-const_term), eps_shift)
+                };
 
-                let bound = TheoryConstraint::LraUb(slack, InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift));
+                let bound = TheoryConstraint::LraUb(slack, bound);
                 self.get_or_create_proxy(bound)
             }
         }
@@ -510,19 +527,33 @@ impl SeMiTONE {
                 let (var, coeff) = vars.iter().next().unwrap();
                 let is_int = self.lra_theory.is_int_var(*var);
 
-                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+                let is_upper_bound = !coeff.is_positive();
 
-                let bound = InfRational::new(Rational::Finite((-const_term + num_shift) / coeff.clone()), eps_shift / coeff);
-                let bound = if coeff.is_positive() { TheoryConstraint::LraLb(*var, bound) } else { TheoryConstraint::LraUb(*var, bound) };
+                let bound = if is_int {
+                    let val = -const_term / coeff.clone();
+                    let tight_val = tighten_int_bound(val, is_upper_bound, strict);
+                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                } else {
+                    let eps_shift = if strict { rug::Rational::from(1) } else { rug::Rational::from(0) };
+                    InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
+                };
+
+                let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
             _ => {
                 let slack = self.lra_theory.get_or_create_slack(vars);
                 let is_int = self.lra_theory.is_int_var(slack);
 
-                let (num_shift, eps_shift) = if strict { if is_int { (rug::Rational::from(1), rug::Rational::from(0)) } else { (rug::Rational::from(0), rug::Rational::from(1)) } } else { (rug::Rational::from(0), rug::Rational::from(0)) };
+                let bound = if is_int {
+                    let tight_val = tighten_int_bound(-const_term, false, strict);
+                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                } else {
+                    let eps_shift = if strict { rug::Rational::from(1) } else { rug::Rational::from(0) };
+                    InfRational::new(Rational::Finite(-const_term), eps_shift)
+                };
 
-                let bound = TheoryConstraint::LraLb(slack, InfRational::new(Rational::Finite(-const_term + num_shift), eps_shift));
+                let bound = TheoryConstraint::LraLb(slack, bound);
                 self.get_or_create_proxy(bound)
             }
         }
@@ -748,7 +779,12 @@ impl SeMiTONE {
                     (TheoryConstraint::LraLb(var, bound), false) => self.lra_theory.set_lb(Some(lit), *var, bound.clone()),
                     (TheoryConstraint::LraLb(var, bound), true) => {
                         let new_bound = if self.lra_theory.is_int_var(*var) {
-                            InfRational::new(bound.rational_part().clone() - Rational::from(1), rug::Rational::from(0))
+                            if let Rational::Finite(r) = bound.rational_part() {
+                                let tight_val = tighten_int_bound(r.clone(), true, true);
+                                InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                            } else {
+                                unreachable!()
+                            }
                         } else {
                             InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_positive() { rug::Rational::from(0) } else { rug::Rational::from(-1) })
                         };
@@ -757,7 +793,12 @@ impl SeMiTONE {
                     (TheoryConstraint::LraUb(var, bound), false) => self.lra_theory.set_ub(Some(lit), *var, bound.clone()),
                     (TheoryConstraint::LraUb(var, bound), true) => {
                         let new_bound = if self.lra_theory.is_int_var(*var) {
-                            InfRational::new(bound.rational_part().clone() + Rational::from(1), rug::Rational::from(0))
+                            if let Rational::Finite(r) = bound.rational_part() {
+                                let tight_val = tighten_int_bound(r.clone(), false, true);
+                                InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
+                            } else {
+                                unreachable!()
+                            }
                         } else {
                             InfRational::new(bound.rational_part().clone(), if bound.infinitesimal_part().is_negative() { rug::Rational::from(0) } else { rug::Rational::from(1) })
                         };

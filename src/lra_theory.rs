@@ -566,6 +566,26 @@ impl LraTheory {
     }
 }
 
+pub(super) fn tighten_int_bound(mut r: rug::Rational, is_upper: bool, strict: bool) -> rug::Rational {
+    if is_upper {
+        if strict {
+            r.ceil_mut();
+            r - rug::Rational::from(1)
+        } else {
+            r.floor_mut();
+            r
+        }
+    } else {
+        if strict {
+            r.floor_mut();
+            r + rug::Rational::from(1)
+        } else {
+            r.ceil_mut();
+            r
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SparseRow {
     pub terms: Vec<(usize, RugRational)>,
