@@ -1,6 +1,5 @@
-use rustc_hash::FxHashMap;
-
 use crate::{rational::InfRational, sat_solver::Lit};
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 pub struct ProxyRegistry {
