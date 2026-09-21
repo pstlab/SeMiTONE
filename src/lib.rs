@@ -670,11 +670,11 @@ impl SeMiTONE {
     }
 
     fn get_or_create_proxy(&mut self, constraint: TheoryConstraint) -> Lit {
-        if let Some(&sat_var) = self.registry.get_proxy(&constraint) {
-            sat_var
+        if let Some(sat_var) = self.registry.get_proxy(&constraint) {
+            Lit::new(sat_var, false)
         } else {
             let sat_var = self.sat_solver.mk_var();
-            self.registry.register(constraint, Lit::new(sat_var, false));
+            self.registry.register(constraint, sat_var);
             Lit::new(sat_var, false)
         }
     }
@@ -777,7 +777,7 @@ impl SeMiTONE {
         while self.notified_len < self.sat_solver.trail.len() {
             let lit = self.sat_solver.trail[self.notified_len];
 
-            if let Some(constraint) = self.registry.get_constraint(lit).or_else(|| self.registry.get_constraint(!lit)) {
+            if let Some(constraint) = self.registry.get_constraint(lit.var()) {
                 let theory_result = match (constraint, lit.sign()) {
                     (TheoryConstraint::LraLb(var, bound), false) => self.lra_theory.set_lb(Some(lit), *var, bound.clone()),
                     (TheoryConstraint::LraLb(var, bound), true) => {
