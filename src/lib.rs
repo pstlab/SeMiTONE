@@ -1,7 +1,6 @@
 #![doc = include_str!("../README.md")]
 
 //! # API overview
-//!
 //! [`SeMiTONE`] owns all solver state. Create expressions with the types in
 //! [`ast`], assert a [`ast::BoolExpr`], then call [`SeMiTONE::propagate`] after
 //! each assertion or decision. Applications that need a complete SAT/SMT search
@@ -1168,8 +1167,8 @@ impl SeMiTONE {
     /// Checks integrality of integer variables under the current rational model.
     ///
     /// Returns `Ok(())` if all integer variables are integral.
-    /// Otherwise returns `Err((backtrack_level, lemma))`, where `lemma` is either
-    /// a generated Gomory cut or a branching disjunction for branch-and-bound.
+    /// Otherwise returns `Err((backtrack_level, lemma))` with either a Gomory
+    /// cut or a branching disjunction for branch-and-bound.
     pub fn check_ints(&mut self) -> Result<(), (usize, Vec<Lit>)> {
         if let Err((var, val)) = self.lra_theory.check_ints() {
             trace!("Integer variable {} has fractional value {}", var, val);
@@ -1188,8 +1187,10 @@ impl SeMiTONE {
 
                 trace!("Generated global Gomory cut with {} dependencies!", lemma.len() - 1);
 
-                let current_level = self.sat_solver.decision_level();
-                return Err((current_level, lemma));
+                if self.sat_solver.lit_value(cut_lit) != Some(true) {
+                    let backtrack_level = if lemma.len() == 1 { 0 } else { self.sat_solver.decision_level() };
+                    return Err((backtrack_level, lemma));
+                }
             }
 
             let Rational::Finite(inner_frac) = val.rational_part() else {

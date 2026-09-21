@@ -370,6 +370,11 @@ impl LraTheory {
             let mut explanation = Vec::new();
 
             for (nb_var, nb_coeff) in row.iter() {
+                if !self.ints[*nb_var] {
+                    valid_row = false;
+                    break;
+                }
+
                 let nb_val = self.value(*nb_var);
 
                 if !nb_val.infinitesimal_part().is_zero() {
@@ -395,8 +400,10 @@ impl LraTheory {
                 };
 
                 if at_lower {
-                    explanation.push(TheoryConstraint::LraLb(*nb_var, lb.clone()));
-                } else {
+                    if self.lbs[*nb_var].0.is_some() {
+                        explanation.push(TheoryConstraint::LraLb(*nb_var, lb.clone()));
+                    }
+                } else if self.ubs[*nb_var].0.is_some() {
                     explanation.push(TheoryConstraint::LraUb(*nb_var, ub.clone()));
                 }
 

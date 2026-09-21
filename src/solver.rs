@@ -1,4 +1,4 @@
-use crate::{SeMiTONE, ast::BoolExpr, sat_solver::Lit};
+use crate::{SeMiTONE, sat_solver::Lit};
 
 pub struct Solver {
     pub smt: SeMiTONE,
@@ -38,7 +38,7 @@ impl Solver {
                 continue;
             }
 
-            if let Some((var, polarity)) = self.heuristic.pick_branching_literal(|var| self.smt.get_bool_val(&BoolExpr::Var(var)).is_none()) {
+            if let Some((var, polarity)) = self.heuristic.pick_branching_literal(|var| self.smt.get_lit_val(Lit::new(var, false)).is_none()) {
                 self.smt.decide(Lit::new(var, polarity));
             } else if let Err((bt_level, lemma)) = self.smt.check_ints() {
                 self.heuristic.sync_with_solver(self.smt.num_vars());
@@ -233,7 +233,7 @@ impl BranchingHeuristics {
 mod tests {
     use super::*;
     use crate::{
-        ast::{ArithExpr, min},
+        ast::{ArithExpr, BoolExpr, min},
         rational::{InfRational, Rational},
     };
 

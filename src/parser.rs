@@ -1,5 +1,5 @@
 use crate::{
-    ast::{ArithExpr, BoolExpr, EufExpr, Expr},
+    ast::{ArithExpr, BoolExpr, EufExpr, Expr, FuncId},
     rational::Rational,
     solver::Solver,
 };
@@ -21,7 +21,7 @@ pub struct SmtParser<'a> {
     bool_vars: FxHashMap<String, BoolExpr>,
     arith_vars: FxHashMap<String, ArithExpr>,
     euf_vars: FxHashMap<String, EufExpr>,
-    euf_funcs: FxHashMap<String, usize>,
+    euf_funcs: FxHashMap<String, FuncId>,
     custom_sorts: FxHashSet<String>,
     var_sorts: FxHashMap<String, String>,
     purified_bool_vars: Vec<(EufExpr, BoolExpr)>,
@@ -122,8 +122,7 @@ impl<'a> SmtParser<'a> {
                         _ => panic!("Unsupported sort: {}", sort_name),
                     }
                 } else {
-                    let func_id = self.euf_funcs.len();
-                    self.euf_funcs.insert(name, func_id);
+                    self.euf_funcs.insert(name, self.solver.smt.new_euf_func());
                 }
             }
             concrete::Command::Assert { term } => {
