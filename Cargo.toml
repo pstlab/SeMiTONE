@@ -32,7 +32,7 @@ num-traits = { version = "0.2.15", optional = true }
 
 [dev-dependencies]
 criterion = "0.8.2"
-rand = "0.10.2"
+rand = "0.10.3"
 
 [[test]]
 name = "fuzz_tests"
