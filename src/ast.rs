@@ -529,7 +529,7 @@ impl fmt::Display for EufExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EufExpr::Var(n) => write!(f, "{}", n),
-            EufExpr::App(n, func_id, args) => {
+            EufExpr::App(_n, func_id, args) => {
                 let args_str: Vec<String> = args.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "{}({})", func_id, args_str.join(", "))
             }

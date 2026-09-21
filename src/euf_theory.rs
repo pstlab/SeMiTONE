@@ -42,6 +42,7 @@ pub(super) struct EufTheory {
     proof_tree: Vec<Option<ProofEdge>>,
     disequalities: Vec<(usize, usize, Lit)>,
     diseq_lim: Vec<usize>,
+    next_func_id: usize,
 }
 
 impl EufTheory {
@@ -58,12 +59,19 @@ impl EufTheory {
             proof_tree: Vec::new(),
             disequalities: Vec::new(),
             diseq_lim: Vec::new(),
+            next_func_id: 0,
         }
     }
 
     pub(super) fn new_var(&mut self) -> usize {
         let id = self.terms.len();
         self.add_term_internal(Term::Var(id))
+    }
+
+    pub(super) fn new_func_id(&mut self) -> usize {
+        let id = self.next_func_id;
+        self.next_func_id += 1;
+        id
     }
 
     pub(super) fn new_app(&mut self, func_id: usize, args: Vec<usize>) -> usize {

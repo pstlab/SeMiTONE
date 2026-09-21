@@ -105,6 +105,11 @@ impl SeMiTONE {
         EufExpr::Var(EufNode(self.euf_theory.new_var()))
     }
 
+    /// Allocates a new uninterpreted function symbol.
+    pub fn new_euf_func(&mut self) -> FuncId {
+        FuncId(self.euf_theory.new_func_id())
+    }
+
     /// Allocates a new EUF function application with the given function ID and arguments.
     pub fn new_euf_app(&mut self, func_id: FuncId, args: Vec<Expr>) -> EufExpr {
         let mut internal_args = Vec::with_capacity(args.len());
