@@ -1,5 +1,68 @@
 use std::{fmt, ops};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoolVar(pub(crate) usize);
+
+impl fmt::Display for BoolVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "b{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnumVar(pub(crate) usize);
+
+impl fmt::Display for EnumVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "e{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IntVar(pub(crate) usize);
+
+impl fmt::Display for IntVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "i{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RealVar(pub(crate) usize);
+
+impl fmt::Display for RealVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "r{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DlVar(pub(crate) usize);
+
+impl fmt::Display for DlVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "d{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FuncId(pub(crate) usize);
+
+impl fmt::Display for FuncId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "f{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EufVar(pub(crate) usize);
+
+impl fmt::Display for EufVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "u{}", self.0)
+    }
+}
+
 /// A typed expression that can be embedded in a generic equality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
@@ -49,7 +112,7 @@ pub enum BoolExpr {
     /// The Boolean constant `false`.
     False,
     /// A Boolean variable allocated by [`crate::SeMiTONE::new_bool`].
-    Var(usize),
+    Var(BoolVar),
     /// Logical negation.
     Not(Box<BoolExpr>),
     /// Logical conjunction.
@@ -67,15 +130,15 @@ pub enum BoolExpr {
     /// Equality between expressions of the same theory.
     Eq(Box<Expr>, Box<Expr>),
     /// A strict difference logic constraint.
-    DlLt(usize, usize, rug::Rational),
+    DlLt(DlVar, DlVar, rug::Rational),
     /// A non-strict difference logic constraint.
-    DlLe(usize, usize, rug::Rational),
+    DlLe(DlVar, DlVar, rug::Rational),
     /// An equality difference logic constraint.
-    DlEq(usize, usize, rug::Rational),
+    DlEq(DlVar, DlVar, rug::Rational),
     /// A non-strict difference logic constraint.
-    DlGe(usize, usize, rug::Rational),
+    DlGe(DlVar, DlVar, rug::Rational),
     /// A strict difference logic constraint.
-    DlGt(usize, usize, rug::Rational),
+    DlGt(DlVar, DlVar, rug::Rational),
 }
 
 impl BoolExpr {
@@ -178,7 +241,7 @@ impl fmt::Display for BoolExpr {
         match self {
             BoolExpr::True => write!(f, "true"),
             BoolExpr::False => write!(f, "false"),
-            BoolExpr::Var(v) => write!(f, "b{}", v),
+            BoolExpr::Var(v) => write!(f, "{}", v),
             BoolExpr::Not(e) => write!(f, "¬{}", e),
             BoolExpr::And(es) => {
                 let es_str: Vec<String> = es.iter().map(|e| format!("{}", e)).collect();
@@ -193,11 +256,11 @@ impl fmt::Display for BoolExpr {
             BoolExpr::Ge(a1, a2) => write!(f, "{} ≥ {}", a1, a2),
             BoolExpr::Gt(a1, a2) => write!(f, "{} > {}", a1, a2),
             BoolExpr::Eq(e1, e2) => write!(f, "{} = {}", e1, e2),
-            BoolExpr::DlLt(from, to, bound) => write!(f, "d{} - d{} < {}", to, from, bound),
-            BoolExpr::DlLe(from, to, bound) => write!(f, "d{} - d{} ≤ {}", to, from, bound),
-            BoolExpr::DlEq(from, to, bound) => write!(f, "d{} - d{} = {}", to, from, bound),
-            BoolExpr::DlGe(from, to, bound) => write!(f, "d{} - d{} ≥ {}", to, from, bound),
-            BoolExpr::DlGt(from, to, bound) => write!(f, "d{} - d{} > {}", to, from, bound),
+            BoolExpr::DlLt(from, to, bound) => write!(f, "{} - {} < {}", to, from, bound),
+            BoolExpr::DlLe(from, to, bound) => write!(f, "{} - {} ≤ {}", to, from, bound),
+            BoolExpr::DlEq(from, to, bound) => write!(f, "{} - {} = {}", to, from, bound),
+            BoolExpr::DlGe(from, to, bound) => write!(f, "{} - {} ≥ {}", to, from, bound),
+            BoolExpr::DlGt(from, to, bound) => write!(f, "{} - {} > {}", to, from, bound),
         }
     }
 }
@@ -206,7 +269,7 @@ impl fmt::Display for BoolExpr {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EnumExpr {
     /// An enum variable allocated by [`crate::SeMiTONE::new_enum`].
-    Var(usize),
+    Var(EnumVar),
     /// An enum constant.
     Const(i32),
 }
@@ -239,7 +302,7 @@ impl AsRef<EnumExpr> for EnumExpr {
 impl fmt::Display for EnumExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EnumExpr::Var(n) => write!(f, "e{}", n),
+            EnumExpr::Var(n) => write!(f, "{}", n),
             EnumExpr::Const(n) => write!(f, "#{}", n),
         }
     }
@@ -255,9 +318,9 @@ pub enum ArithExpr {
     /// A rational constant.
     Const(rug::Rational),
     /// An integer variable allocated by [`crate::SeMiTONE::new_int`].
-    IntVar(usize),
+    IntVar(IntVar),
     /// A real variable allocated by [`crate::SeMiTONE::new_real`].
-    RealVar(usize),
+    RealVar(RealVar),
     /// A sum of arithmetic terms.
     Add(Vec<ArithExpr>),
     /// A product of arithmetic terms.
@@ -425,8 +488,8 @@ impl fmt::Display for ArithExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ArithExpr::Const(r) => write!(f, "{}", r),
-            ArithExpr::IntVar(n) => write!(f, "i{}", n),
-            ArithExpr::RealVar(n) => write!(f, "r{}", n),
+            ArithExpr::IntVar(n) => write!(f, "{}", n),
+            ArithExpr::RealVar(n) => write!(f, "{}", n),
             ArithExpr::Add(es) => {
                 let mut it = es.iter();
                 let Some(first) = it.next() else { return write!(f, "()") };
@@ -452,8 +515,8 @@ impl fmt::Display for ArithExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EufExpr {
-    Var(usize),
-    App(usize, Vec<Expr>),
+    Var(EufVar),
+    App(FuncId, Vec<Expr>),
 }
 
 impl EufExpr {
@@ -465,10 +528,10 @@ impl EufExpr {
 impl fmt::Display for EufExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            EufExpr::Var(n) => write!(f, "u{}", n),
+            EufExpr::Var(n) => write!(f, "{}", n),
             EufExpr::App(func_id, args) => {
                 let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
-                write!(f, "f{}({})", func_id, args_str.join(", "))
+                write!(f, "{}({})", func_id, args_str.join(", "))
             }
         }
     }
@@ -631,35 +694,35 @@ mod tests {
 
     #[test]
     fn bool_display_var() {
-        assert_eq!(BoolExpr::Var(3).to_string(), "b3");
+        assert_eq!(BoolExpr::Var(BoolVar(3)).to_string(), "b3");
     }
 
     #[test]
     fn bool_display_not() {
-        assert_eq!((!BoolExpr::Var(0)).to_string(), "¬b0");
+        assert_eq!((!BoolExpr::Var(BoolVar(0))).to_string(), "¬b0");
     }
 
     #[test]
     fn bool_display_and() {
-        assert_eq!((BoolExpr::Var(0) & BoolExpr::Var(1)).to_string(), "(b0 ∧ b1)");
+        assert_eq!((BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1))).to_string(), "(b0 ∧ b1)");
     }
 
     #[test]
     fn bool_display_or() {
-        assert_eq!((BoolExpr::Var(0) | BoolExpr::Var(1)).to_string(), "(b0 ∨ b1)");
+        assert_eq!((BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))).to_string(), "(b0 ∨ b1)");
     }
 
     #[test]
     fn bool_display_comparisons() {
-        assert_eq!(BoolExpr::Lt(ArithExpr::IntVar(0), ArithExpr::IntVar(1)).to_string(), "i0 < i1");
-        assert_eq!(BoolExpr::Le(ArithExpr::IntVar(0), ArithExpr::IntVar(1)).to_string(), "i0 ≤ i1");
-        assert_eq!(BoolExpr::Ge(ArithExpr::IntVar(0), ArithExpr::IntVar(1)).to_string(), "i0 ≥ i1");
-        assert_eq!(BoolExpr::Gt(ArithExpr::IntVar(0), ArithExpr::IntVar(1)).to_string(), "i0 > i1");
+        assert_eq!(BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 < i1");
+        assert_eq!(BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 ≤ i1");
+        assert_eq!(BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 ≥ i1");
+        assert_eq!(BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 > i1");
     }
 
     #[test]
     fn bool_display_eq() {
-        let e = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(0))), Box::new(Expr::Bool(BoolExpr::Var(1))));
+        let e = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(BoolVar(0)))), Box::new(Expr::Bool(BoolExpr::Var(BoolVar(1)))));
         assert_eq!(e.to_string(), "b0 = b1");
     }
 
@@ -672,31 +735,31 @@ mod tests {
 
     #[test]
     fn arith_display_int_real() {
-        assert_eq!(ArithExpr::IntVar(2).to_string(), "i2");
-        assert_eq!(ArithExpr::RealVar(5).to_string(), "r5");
+        assert_eq!(ArithExpr::IntVar(IntVar(2)).to_string(), "i2");
+        assert_eq!(ArithExpr::RealVar(RealVar(5)).to_string(), "r5");
     }
 
     #[test]
     fn arith_display_add() {
-        let e = ArithExpr::IntVar(0) + ArithExpr::IntVar(1);
+        let e = ArithExpr::IntVar(IntVar(0)) + ArithExpr::IntVar(IntVar(1));
         assert_eq!(e.to_string(), "(i0 + i1)");
     }
 
     #[test]
     fn arith_display_sub() {
-        let e = ArithExpr::IntVar(0) - ArithExpr::IntVar(1);
+        let e = ArithExpr::IntVar(IntVar(0)) - ArithExpr::IntVar(IntVar(1));
         assert_eq!(e.to_string(), "(i0 - i1)");
     }
 
     #[test]
     fn arith_display_mul() {
-        let e = ArithExpr::IntVar(0) * ArithExpr::IntVar(1);
+        let e = ArithExpr::IntVar(IntVar(0)) * ArithExpr::IntVar(IntVar(1));
         assert_eq!(e.to_string(), "(i0 * i1)");
     }
 
     #[test]
     fn arith_display_div() {
-        let e = ArithExpr::Div(Box::new(ArithExpr::IntVar(0)), Box::new(ArithExpr::IntVar(1)));
+        let e = ArithExpr::Div(Box::new(ArithExpr::IntVar(IntVar(0))), Box::new(ArithExpr::IntVar(IntVar(1))));
         assert_eq!(e.to_string(), "(i0 / i1)");
     }
 
@@ -709,80 +772,80 @@ mod tests {
 
     #[test]
     fn push_negations_var_unchanged() {
-        assert_eq!(push_negations(&BoolExpr::Var(0)), BoolExpr::Var(0));
+        assert_eq!(push_negations(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn push_negations_not_var_becomes_not_var() {
         // Not(var) has no inner Not, so stays as Not(var)
-        assert_eq!(push_negations(&!BoolExpr::Var(0)), !BoolExpr::Var(0));
+        assert_eq!(push_negations(&!BoolExpr::Var(BoolVar(0))), !BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn push_negations_double_not_eliminates() {
         // Not(Not(x)) => x
-        assert_eq!(push_negations(&!(!BoolExpr::Var(0))), BoolExpr::Var(0));
+        assert_eq!(push_negations(&!(!BoolExpr::Var(BoolVar(0)))), BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn push_negations_triple_not() {
         // Not(Not(Not(x))) => Not(x)
-        assert_eq!(push_negations(&!(!(!BoolExpr::Var(0)))), !BoolExpr::Var(0));
+        assert_eq!(push_negations(&!(!(!BoolExpr::Var(BoolVar(0))))), !BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn push_negations_recurses_into_and() {
-        let expr = !(!BoolExpr::Var(0)) & !(!BoolExpr::Var(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Var(0) & BoolExpr::Var(1));
+        let expr = !(!BoolExpr::Var(BoolVar(0))) & !(!BoolExpr::Var(BoolVar(1)));
+        assert_eq!(push_negations(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn push_negations_recurses_into_or() {
-        let expr = !(!BoolExpr::Var(0)) | BoolExpr::Var(1);
-        assert_eq!(push_negations(&expr), BoolExpr::Var(0) | BoolExpr::Var(1));
+        let expr = !(!BoolExpr::Var(BoolVar(0))) | BoolExpr::Var(BoolVar(1));
+        assert_eq!(push_negations(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn push_negations_not_and_demorgan() {
         // Not(And(a, b)) => Or(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(0) & BoolExpr::Var(1));
-        assert_eq!(push_negations(&expr), !BoolExpr::Var(0) | !BoolExpr::Var(1));
+        let expr = !(BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(BoolVar(0)) | !BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn push_negations_not_or_demorgan() {
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(0) | BoolExpr::Var(1));
-        assert_eq!(push_negations(&expr), !BoolExpr::Var(0) & !BoolExpr::Var(1));
+        let expr = !(BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(BoolVar(0)) & !BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn push_negations_not_lt_becomes_ge() {
-        let expr = !BoolExpr::Lt(ArithExpr::IntVar(0), ArithExpr::IntVar(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Ge(ArithExpr::IntVar(0), ArithExpr::IntVar(1)));
+        let expr = !BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
+        assert_eq!(push_negations(&expr), BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
     }
 
     #[test]
     fn push_negations_not_le_becomes_gt() {
-        let expr = !BoolExpr::Le(ArithExpr::IntVar(0), ArithExpr::IntVar(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Gt(ArithExpr::IntVar(0), ArithExpr::IntVar(1)));
+        let expr = !BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
+        assert_eq!(push_negations(&expr), BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
     }
 
     #[test]
     fn push_negations_not_ge_becomes_lt() {
-        let expr = !BoolExpr::Ge(ArithExpr::IntVar(0), ArithExpr::IntVar(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Lt(ArithExpr::IntVar(0), ArithExpr::IntVar(1)));
+        let expr = !BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
+        assert_eq!(push_negations(&expr), BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
     }
 
     #[test]
     fn push_negations_not_gt_becomes_le() {
-        let expr = !BoolExpr::Gt(ArithExpr::IntVar(0), ArithExpr::IntVar(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Le(ArithExpr::IntVar(0), ArithExpr::IntVar(1)));
+        let expr = !BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
+        assert_eq!(push_negations(&expr), BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
     }
 
     #[test]
     fn push_negations_not_eq_stays_not_eq() {
-        let inner = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(0))), Box::new(Expr::Bool(BoolExpr::Var(1))));
+        let inner = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(BoolVar(0)))), Box::new(Expr::Bool(BoolExpr::Var(BoolVar(1)))));
         let expr = !inner.clone();
         assert_eq!(push_negations(&expr), !inner);
     }
@@ -791,55 +854,55 @@ mod tests {
 
     #[test]
     fn distribute_atom_unchanged() {
-        assert_eq!(distribute(&BoolExpr::Var(0)), BoolExpr::Var(0));
+        assert_eq!(distribute(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
         assert_eq!(distribute(&BoolExpr::True), BoolExpr::True);
     }
 
     #[test]
     fn distribute_and_of_atoms() {
-        let expr = BoolExpr::Var(0) & BoolExpr::Var(1);
-        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1));
+        let expr = BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1));
+        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn distribute_or_of_atoms() {
-        let expr = BoolExpr::Var(0) | BoolExpr::Var(1);
+        let expr = BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1));
         // Or(a, b) with no And inside stays as-is (wrapped in And with one element, unwrapped)
-        assert_eq!(distribute(&expr), BoolExpr::Var(0) | BoolExpr::Var(1));
+        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn distribute_or_over_and() {
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2));
-        let expected = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(0) | BoolExpr::Var(2));
+        let expr = BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        let expected = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(2)));
         assert_eq!(distribute(&expr), expected);
     }
 
     #[test]
     fn distribute_flattens_nested_or() {
         // Or(Or(a, b), c) => Or(a, b, c)
-        let expr = (BoolExpr::Var(0) | BoolExpr::Var(1)) | BoolExpr::Var(2);
-        assert_eq!(distribute(&expr), BoolExpr::Var(0) | BoolExpr::Var(1) | BoolExpr::Var(2));
+        let expr = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) | BoolExpr::Var(BoolVar(2));
+        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)) | BoolExpr::Var(BoolVar(2)));
     }
 
     #[test]
     fn distribute_flattens_nested_and() {
         // And(And(a, b), c) => And(a, b, c)
-        let expr = BoolExpr::Var(0) & (BoolExpr::Var(1) & BoolExpr::Var(2));
-        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1) & BoolExpr::Var(2));
+        let expr = BoolExpr::Var(BoolVar(0)) & (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
     }
 
     #[test]
     fn distribute_and_inside_and_flattened() {
-        let expr = BoolExpr::Var(0) & (BoolExpr::Var(1) & BoolExpr::Var(2));
-        assert_eq!(distribute(&expr), BoolExpr::Var(0) & BoolExpr::Var(1) & BoolExpr::Var(2));
+        let expr = BoolExpr::Var(BoolVar(0)) & (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
     }
 
     #[test]
     fn distribute_cartesian_product_two_ands() {
         // Or(And(a, b), And(c, d)) => And(Or(a,c), Or(a,d), Or(b,c), Or(b,d))
-        let expr = (BoolExpr::Var(0) & BoolExpr::Var(1)) | (BoolExpr::Var(2) & BoolExpr::Var(3));
+        let expr = (BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1))) | (BoolExpr::Var(BoolVar(2)) & BoolExpr::Var(BoolVar(3)));
         let result = distribute(&expr);
         // Should be an And of four Or clauses
         if let BoolExpr::And(clauses) = result {
@@ -856,40 +919,40 @@ mod tests {
 
     #[test]
     fn to_cnf_atom_unchanged() {
-        assert_eq!(to_cnf(&BoolExpr::Var(0)), BoolExpr::Var(0));
+        assert_eq!(to_cnf(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn to_cnf_already_cnf() {
         // And(Or(a, b), Or(c, d)) is already CNF
-        let expr = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(2) | BoolExpr::Var(3));
+        let expr = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(2)) | BoolExpr::Var(BoolVar(3)));
         assert_eq!(to_cnf(&expr), expr);
     }
 
     #[test]
     fn to_cnf_double_negation() {
-        assert_eq!(to_cnf(&!(!BoolExpr::Var(0))), BoolExpr::Var(0));
+        assert_eq!(to_cnf(&!(!BoolExpr::Var(BoolVar(0)))), BoolExpr::Var(BoolVar(0)));
     }
 
     #[test]
     fn to_cnf_not_and_demorgan_then_distribute() {
         // Not(And(a, b)) => Or(Not(a), Not(b)) — already a single clause
-        let expr = !(BoolExpr::Var(0) & BoolExpr::Var(1));
-        assert_eq!(to_cnf(&expr), !BoolExpr::Var(0) | !BoolExpr::Var(1));
+        let expr = !(BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(BoolVar(0)) | !BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn to_cnf_not_or_demorgan() {
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(0) | BoolExpr::Var(1));
-        assert_eq!(to_cnf(&expr), !BoolExpr::Var(0) & !BoolExpr::Var(1));
+        let expr = !(BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(BoolVar(0)) & !BoolExpr::Var(BoolVar(1)));
     }
 
     #[test]
     fn to_cnf_or_over_and_distributes() {
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2));
-        let expected = (BoolExpr::Var(0) | BoolExpr::Var(1)) & (BoolExpr::Var(0) | BoolExpr::Var(2));
+        let expr = BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        let expected = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(2)));
         assert_eq!(to_cnf(&expr), expected);
     }
 
@@ -902,7 +965,7 @@ mod tests {
     #[test]
     fn to_cnf_nested_not_and_or() {
         // Not(Or(And(a,b), c)) => And(Or(Not(a), Not(c)), Or(Not(b), Not(c)))
-        let expr = !(BoolExpr::Var(0) | (BoolExpr::Var(1) & BoolExpr::Var(2)));
+        let expr = !(BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2))));
         // push_negations: And(Or(Not(a), Not(b)), Not(c))
         // distribute: And of Or(Not(a),Not(b)) and Not(c) — already flat
         let result = to_cnf(&expr);

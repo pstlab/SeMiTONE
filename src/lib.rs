@@ -21,7 +21,7 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, Expr},
+    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EnumVar, EufExpr, EufVar, Expr, FuncId, IntVar, RealVar},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
     euf_theory::{EufTheory, Term},
@@ -77,32 +77,32 @@ impl SeMiTONE {
 
     /// Allocates a new Boolean variable.
     pub fn new_bool(&mut self) -> BoolExpr {
-        BoolExpr::Var(self.sat_solver.mk_var())
+        BoolExpr::Var(BoolVar(self.sat_solver.mk_var()))
     }
 
     /// Allocates a new integer variable.
     pub fn new_int(&mut self) -> ArithExpr {
-        ArithExpr::IntVar(self.lra_theory.mk_int())
+        ArithExpr::IntVar(IntVar(self.lra_theory.mk_int()))
     }
 
     /// Allocates a new real variable.
     pub fn new_real(&mut self) -> ArithExpr {
-        ArithExpr::RealVar(self.lra_theory.mk_real())
+        ArithExpr::RealVar(RealVar(self.lra_theory.mk_real()))
     }
 
     /// Allocates a new enum variable with the given finite domain.
     pub fn new_enum(&mut self, domain: impl IntoIterator<Item = i32>) -> EnumExpr {
-        EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
+        EnumExpr::Var(EnumVar(self.enum_theory.mk_var(domain.into_iter().collect())))
     }
 
     /// Allocates a new time point variable for difference logic constraints.
-    pub fn new_time_point(&mut self) -> usize {
-        self.dl_theory.new_var()
+    pub fn new_time_point(&mut self) -> DlVar {
+        DlVar(self.dl_theory.new_var())
     }
 
     /// Allocates a new EUF variable.
     pub fn new_euf_var(&mut self) -> EufExpr {
-        EufExpr::Var(self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len())))
+        EufExpr::Var(EufVar(self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len()))))
     }
 
     /// Allocates a new EUF function application with the given function ID and arguments.
@@ -111,8 +111,8 @@ impl SeMiTONE {
         for arg in &args {
             if let Expr::Euf(euf_arg) = arg {
                 let arg_id = match euf_arg {
-                    EufExpr::Var(n) => *n,
-                    EufExpr::App(internal_id, _) => *internal_id,
+                    EufExpr::Var(n) => n.0,
+                    EufExpr::App(internal_id, _) => internal_id.0,
                 };
                 internal_args.push(arg_id);
             } else {
@@ -121,7 +121,7 @@ impl SeMiTONE {
         }
 
         let id = self.euf_theory.add_term(Term::App(func_id, internal_args));
-        EufExpr::App(id, args)
+        EufExpr::App(FuncId(id), args)
     }
 
     /// Returns the current number of SAT variables allocated in the solver core.
@@ -289,16 +289,16 @@ impl SeMiTONE {
         match expr {
             BoolExpr::True => Lit::TRUE,
             BoolExpr::False => Lit::FALSE,
-            BoolExpr::Var(v) => Lit::new(*v, false),
+            BoolExpr::Var(v) => Lit::new(v.0, false),
             BoolExpr::Not(inner) => match inner.as_ref() {
                 BoolExpr::Lt(a1, a2) => self.mk_ge(a1, a2, false),
                 BoolExpr::Le(a1, a2) => self.mk_ge(a1, a2, true),
                 BoolExpr::Ge(a1, a2) => self.mk_le(a1, a2, true),
                 BoolExpr::Gt(a1, a2) => self.mk_le(a1, a2, false),
-                BoolExpr::DlLt(f, t, b) => self.mk_dl_ge(*f, *t, b.clone(), false), // !(x < y) => x >= y
-                BoolExpr::DlLe(f, t, b) => self.mk_dl_ge(*f, *t, b.clone(), true),  // !(x <= y) => x > y
-                BoolExpr::DlGe(f, t, b) => self.mk_dl_le(*f, *t, b.clone(), true),  // !(x >= y) => x < y
-                BoolExpr::DlGt(f, t, b) => self.mk_dl_le(*f, *t, b.clone(), false), // !(x > y) => x <= y
+                BoolExpr::DlLt(f, t, b) => self.mk_dl_ge(f.0, t.0, b.clone(), false), // !(x < y) => x >= y
+                BoolExpr::DlLe(f, t, b) => self.mk_dl_ge(f.0, t.0, b.clone(), true),  // !(x <= y) => x > y
+                BoolExpr::DlGe(f, t, b) => self.mk_dl_le(f.0, t.0, b.clone(), true),  // !(x >= y) => x < y
+                BoolExpr::DlGt(f, t, b) => self.mk_dl_le(f.0, t.0, b.clone(), false), // !(x > y) => x <= y
                 _ => !self.encode_bool(inner),
             },
             BoolExpr::And(terms) => {
@@ -344,11 +344,11 @@ impl SeMiTONE {
             BoolExpr::Ge(e1, e2) => self.mk_ge(e1, e2, false),
             BoolExpr::Gt(e1, e2) => self.mk_ge(e1, e2, true),
             BoolExpr::Eq(e1, e2) => self.encode_eq(e1, e2),
-            BoolExpr::DlLt(from, to, b) => self.mk_dl_le(*from, *to, b.clone(), true),
-            BoolExpr::DlLe(from, to, b) => self.mk_dl_le(*from, *to, b.clone(), false),
-            BoolExpr::DlGt(from, to, b) => self.mk_dl_ge(*from, *to, b.clone(), true),
-            BoolExpr::DlGe(from, to, b) => self.mk_dl_ge(*from, *to, b.clone(), false),
-            BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(*from, *to, b.clone()),
+            BoolExpr::DlLt(from, to, b) => self.mk_dl_le(from.0, to.0, b.clone(), true),
+            BoolExpr::DlLe(from, to, b) => self.mk_dl_le(from.0, to.0, b.clone(), false),
+            BoolExpr::DlGt(from, to, b) => self.mk_dl_ge(from.0, to.0, b.clone(), true),
+            BoolExpr::DlGe(from, to, b) => self.mk_dl_ge(from.0, to.0, b.clone(), false),
+            BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(from.0, to.0, b.clone()),
         }
     }
 
@@ -371,12 +371,12 @@ impl SeMiTONE {
             (Expr::Enum(e1), Expr::Enum(e2)) => self.mk_enum_eq(e1, e2),
             (Expr::Euf(u1), Expr::Euf(u2)) => {
                 let id1 = match u1 {
-                    crate::ast::EufExpr::Var(n) => *n,
-                    crate::ast::EufExpr::App(n, _) => *n,
+                    crate::ast::EufExpr::Var(n) => n.0,
+                    crate::ast::EufExpr::App(n, _) => n.0,
                 };
                 let id2 = match u2 {
-                    crate::ast::EufExpr::Var(n) => *n,
-                    crate::ast::EufExpr::App(n, _) => *n,
+                    crate::ast::EufExpr::Var(n) => n.0,
+                    crate::ast::EufExpr::App(n, _) => n.0,
                 };
 
                 if id1 == id2 {
@@ -400,14 +400,14 @@ impl SeMiTONE {
                     Lit::FALSE
                 }
             }
-            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => self.get_or_create_proxy(TheoryConstraint::EnumEq(*v, *c)),
+            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => self.get_or_create_proxy(TheoryConstraint::EnumEq(v.0, *c)),
             (EnumExpr::Var(v1), EnumExpr::Var(v2)) => {
                 if v1 == v2 {
                     return Lit::TRUE;
                 }
 
-                let domain1 = self.enum_theory.initial_domains[*v1].clone();
-                let domain2 = self.enum_theory.initial_domains[*v2].clone();
+                let domain1 = self.enum_theory.initial_domains[v1.0].clone();
+                let domain2 = self.enum_theory.initial_domains[v2.0].clone();
                 let common: Vec<i32> = domain1.intersection(&domain2).copied().collect();
 
                 if common.is_empty() {
@@ -416,8 +416,8 @@ impl SeMiTONE {
 
                 let mut lits = Vec::with_capacity(common.len());
                 for val in common {
-                    let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(*v1, val));
-                    let p2 = self.get_or_create_proxy(TheoryConstraint::EnumEq(*v2, val));
+                    let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v1.0, val));
+                    let p2 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v2.0, val));
 
                     let and_proxy_var = self.sat_solver.mk_var();
                     let and_proxy = Lit::new(and_proxy_var, false);
@@ -608,8 +608,11 @@ impl SeMiTONE {
                 temp.assign(c * scale);
                 *const_term += &*temp;
             }
-            ArithExpr::IntVar(var) | ArithExpr::RealVar(var) => {
-                self.accumulate_var(*var, scale, vars, temp);
+            ArithExpr::IntVar(var) => {
+                self.accumulate_var(var.0, scale, vars, temp);
+            }
+            ArithExpr::RealVar(var) => {
+                self.accumulate_var(var.0, scale, vars, temp);
             }
             ArithExpr::Add(terms) => {
                 for term in terms {
@@ -703,7 +706,7 @@ impl SeMiTONE {
             EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
         };
 
-        let lit = self.get_or_create_proxy(TheoryConstraint::EnumEq(var, value));
+        let lit = self.get_or_create_proxy(TheoryConstraint::EnumEq(var.0, value));
         self.decide(lit)
     }
 
@@ -854,7 +857,7 @@ impl SeMiTONE {
         match expr {
             BoolExpr::True => Some(true),
             BoolExpr::False => Some(false),
-            BoolExpr::Var(v) => *self.sat_solver.value(*v),
+            BoolExpr::Var(v) => *self.sat_solver.value(v.0),
             BoolExpr::Not(inner) => self.get_bool_val(inner).map(|val| !val),
             BoolExpr::And(args) => {
                 let mut result = Some(true);
@@ -1048,7 +1051,8 @@ impl SeMiTONE {
     pub fn get_arith_val(&self, expr: &ArithExpr) -> Option<InfRational> {
         match expr {
             ArithExpr::Const(c) => Some(InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0))),
-            ArithExpr::RealVar(v) | ArithExpr::IntVar(v) => Some(self.lra_theory.value(*v).clone()),
+            ArithExpr::IntVar(v) => Some(self.lra_theory.value(v.0).clone()),
+            ArithExpr::RealVar(v) => Some(self.lra_theory.value(v.0).clone()),
             ArithExpr::Add(terms) => {
                 let mut sum = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 for term in terms {
@@ -1068,7 +1072,8 @@ impl SeMiTONE {
                 let val = InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0));
                 Some((val.clone(), val))
             }
-            ArithExpr::RealVar(v) | ArithExpr::IntVar(v) => Some((self.lra_theory.lb(*v).clone(), self.lra_theory.ub(*v).clone())),
+            ArithExpr::IntVar(v) => Some((self.lra_theory.lb(v.0).clone(), self.lra_theory.ub(v.0).clone())),
+            ArithExpr::RealVar(v) => Some((self.lra_theory.lb(v.0).clone(), self.lra_theory.ub(v.0).clone())),
             ArithExpr::Add(terms) => {
                 let mut sum_lb = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 let mut sum_ub = sum_lb.clone();
@@ -1092,15 +1097,15 @@ impl SeMiTONE {
         match expr {
             EnumExpr::Const(c) => Some(*c),
             EnumExpr::Var(v) => {
-                let domain = &self.enum_theory.active_domains[*v];
+                let domain = &self.enum_theory.active_domains[v.0];
                 if domain.len() == 1 { domain.iter().next().copied() } else { None }
             }
         }
     }
 
     /// Returns the current lower and upper bounds of a difference logic variable.
-    pub fn get_time_bounds(&self, tp: usize) -> (InfRational, InfRational) {
-        (self.dl_theory.lb(tp), self.dl_theory.ub(tp))
+    pub fn get_time_bounds(&self, var: DlVar) -> (InfRational, InfRational) {
+        (self.dl_theory.lb(var.0), self.dl_theory.ub(var.0))
     }
 
     /// Opens a new incremental user scope for assertions and decisions.
