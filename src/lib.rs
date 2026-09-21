@@ -21,10 +21,10 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EnumVar, EufExpr, EufVar, Expr, FuncId, IntVar, RealVar},
+    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EnumVar, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
-    euf_theory::{EufTheory, Term},
+    euf_theory::EufTheory,
     lra_theory::{LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
@@ -95,33 +95,33 @@ impl SeMiTONE {
         EnumExpr::Var(EnumVar(self.enum_theory.mk_var(domain.into_iter().collect())))
     }
 
-    /// Allocates a new time point variable for difference logic constraints.
-    pub fn new_time_point(&mut self) -> DlVar {
+    /// Allocates a new difference logic variable.
+    pub fn new_dl_var(&mut self) -> DlVar {
         DlVar(self.dl_theory.new_var())
     }
 
     /// Allocates a new EUF variable.
     pub fn new_euf_var(&mut self) -> EufExpr {
-        EufExpr::Var(EufVar(self.euf_theory.add_term(Term::Var(self.euf_theory.terms.len()))))
+        EufExpr::Var(EufNode(self.euf_theory.new_var()))
     }
 
     /// Allocates a new EUF function application with the given function ID and arguments.
-    pub fn new_euf_app(&mut self, func_id: usize, args: Vec<Expr>) -> EufExpr {
+    pub fn new_euf_app(&mut self, func_id: FuncId, args: Vec<Expr>) -> EufExpr {
         let mut internal_args = Vec::with_capacity(args.len());
         for arg in &args {
             if let Expr::Euf(euf_arg) = arg {
-                let arg_id = match euf_arg {
-                    EufExpr::Var(n) => n.0,
-                    EufExpr::App(internal_id, _) => internal_id.0,
+                let node_id = match euf_arg {
+                    EufExpr::Var(node) => node.0,
+                    EufExpr::App(node, _, _) => node.0,
                 };
-                internal_args.push(arg_id);
+                internal_args.push(node_id);
             } else {
                 panic!("EUF application arguments must be EUF expressions, but got: {:?}", arg);
             }
         }
 
-        let id = self.euf_theory.add_term(Term::App(func_id, internal_args));
-        EufExpr::App(FuncId(id), args)
+        let node_id = self.euf_theory.new_app(func_id.0, internal_args);
+        EufExpr::App(EufNode(node_id), func_id, args)
     }
 
     /// Returns the current number of SAT variables allocated in the solver core.
@@ -372,11 +372,11 @@ impl SeMiTONE {
             (Expr::Euf(u1), Expr::Euf(u2)) => {
                 let id1 = match u1 {
                     crate::ast::EufExpr::Var(n) => n.0,
-                    crate::ast::EufExpr::App(n, _) => n.0,
+                    crate::ast::EufExpr::App(n, _, _) => n.0,
                 };
                 let id2 = match u2 {
                     crate::ast::EufExpr::Var(n) => n.0,
-                    crate::ast::EufExpr::App(n, _) => n.0,
+                    crate::ast::EufExpr::App(n, _, _) => n.0,
                 };
 
                 if id1 == id2 {
@@ -932,8 +932,8 @@ impl SeMiTONE {
                 }
             }
             BoolExpr::DlLt(from, to, bound) => {
-                let (lb_from, ub_from) = self.get_time_bounds(*from);
-                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let (lb_from, ub_from) = self.get_dl_bounds(*from);
+                let (lb_to, ub_to) = self.get_dl_bounds(*to);
                 let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
 
                 // Max possible distance: ub_to - lb_from
@@ -950,8 +950,8 @@ impl SeMiTONE {
                 }
             }
             BoolExpr::DlLe(from, to, bound) => {
-                let (lb_from, ub_from) = self.get_time_bounds(*from);
-                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let (lb_from, ub_from) = self.get_dl_bounds(*from);
+                let (lb_to, ub_to) = self.get_dl_bounds(*to);
                 let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
 
                 let max_dist = ub_to.clone() - lb_from.clone();
@@ -966,8 +966,8 @@ impl SeMiTONE {
                 }
             }
             BoolExpr::DlGt(from, to, bound) => {
-                let (lb_from, ub_from) = self.get_time_bounds(*from);
-                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let (lb_from, ub_from) = self.get_dl_bounds(*from);
+                let (lb_to, ub_to) = self.get_dl_bounds(*to);
                 let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
 
                 let max_dist = ub_to.clone() - lb_from.clone();
@@ -982,8 +982,8 @@ impl SeMiTONE {
                 }
             }
             BoolExpr::DlGe(from, to, bound) => {
-                let (lb_from, ub_from) = self.get_time_bounds(*from);
-                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let (lb_from, ub_from) = self.get_dl_bounds(*from);
+                let (lb_to, ub_to) = self.get_dl_bounds(*to);
                 let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
 
                 let max_dist = ub_to.clone() - lb_from.clone();
@@ -998,8 +998,8 @@ impl SeMiTONE {
                 }
             }
             BoolExpr::DlEq(from, to, bound) => {
-                let (lb_from, ub_from) = self.get_time_bounds(*from);
-                let (lb_to, ub_to) = self.get_time_bounds(*to);
+                let (lb_from, ub_from) = self.get_dl_bounds(*from);
+                let (lb_to, ub_to) = self.get_dl_bounds(*to);
                 let bound_inf = InfRational::new(Rational::Finite(bound.clone()), rug::Rational::from(0));
 
                 let max_dist = ub_to.clone() - lb_from.clone();
@@ -1103,8 +1103,13 @@ impl SeMiTONE {
         }
     }
 
+    /// Returns the current value of a difference logic variable.
+    pub fn get_dl_val(&self, var: DlVar) -> InfRational {
+        self.dl_theory.value(var.0)
+    }
+
     /// Returns the current lower and upper bounds of a difference logic variable.
-    pub fn get_time_bounds(&self, var: DlVar) -> (InfRational, InfRational) {
+    pub fn get_dl_bounds(&self, var: DlVar) -> (InfRational, InfRational) {
         (self.dl_theory.lb(var.0), self.dl_theory.ub(var.0))
     }
 
@@ -1366,50 +1371,50 @@ mod tests {
     #[test]
     fn test_dl_chain_upper_bounds() {
         let mut solver = SeMiTONE::new();
-        let zero = solver.new_time_point(); // first time point created = reference 0 in the DL theory
-        let t1 = solver.new_time_point();
-        let t2 = solver.new_time_point();
+        let zero = solver.new_dl_var(); // first difference logic variable created = reference 0 in the DL theory
+        let t1 = solver.new_dl_var();
+        let t2 = solver.new_dl_var();
 
         let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(10))); // t1 - zero <= 10
         let _ = solver.assert(BoolExpr::DlLe(t1, t2, rug::Rational::from(5))); // t2 - t1 <= 5
 
         assert!(solver.propagate().is_ok());
 
-        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(10));
-        assert_eq!(solver.get_time_bounds(t2).1, InfRational::from(15));
-        assert_eq!(solver.get_time_bounds(t1).0, InfRational::from(Rational::NegativeInf), "no lower bound imposed");
+        assert_eq!(solver.get_dl_bounds(t1).1, InfRational::from(10));
+        assert_eq!(solver.get_dl_bounds(t2).1, InfRational::from(15));
+        assert_eq!(solver.get_dl_bounds(t1).0, InfRational::from(Rational::NegativeInf), "no lower bound imposed");
     }
 
     #[test]
     fn test_dl_lower_and_upper_bound_interval() {
         let mut solver = SeMiTONE::new();
-        let zero = solver.new_time_point();
-        let t1 = solver.new_time_point();
+        let zero = solver.new_dl_var();
+        let t1 = solver.new_dl_var();
 
         let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(8))); // t1 <= 8
         let _ = solver.assert(BoolExpr::DlGe(zero, t1, rug::Rational::from(3))); // t1 >= 3
 
         assert!(solver.propagate().is_ok());
-        assert_eq!(solver.get_time_bounds(t1), (InfRational::from(3), InfRational::from(8)));
+        assert_eq!(solver.get_dl_bounds(t1), (InfRational::from(3), InfRational::from(8)));
     }
 
     #[test]
     fn test_dl_eq_pins_value() {
         let mut solver = SeMiTONE::new();
-        let zero = solver.new_time_point();
-        let t1 = solver.new_time_point();
+        let zero = solver.new_dl_var();
+        let t1 = solver.new_dl_var();
 
         let _ = solver.assert(BoolExpr::DlEq(zero, t1, rug::Rational::from(7)));
         assert!(solver.propagate().is_ok());
 
-        assert_eq!(solver.get_time_bounds(t1), (InfRational::from(7), InfRational::from(7)));
+        assert_eq!(solver.get_dl_bounds(t1), (InfRational::from(7), InfRational::from(7)));
     }
 
     #[test]
     fn test_dl_negative_cycle_conflict() {
         let mut solver = SeMiTONE::new();
-        let a = solver.new_time_point();
-        let b = solver.new_time_point();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
 
         // b - a <= 5 and b - a >= 10 (via a - b <= -10): irreconcilable
         let _ = solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(5)));
@@ -1421,8 +1426,8 @@ mod tests {
     #[test]
     fn test_dl_strict_boundary_conflict() {
         let mut solver = SeMiTONE::new();
-        let a = solver.new_time_point();
-        let b = solver.new_time_point();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
 
         // b - a <= 0 (non-strict) and a - b < 0, i.e. b - a > 0 (strict):
         // the weights sum to 0 but the conflict must be detected via the infinitesimal trick
@@ -1435,29 +1440,29 @@ mod tests {
     #[test]
     fn test_dl_non_strict_boundary_is_sat() {
         let mut solver = SeMiTONE::new();
-        let a = solver.new_time_point();
-        let b = solver.new_time_point();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
 
         let _ = solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(0)));
         let _ = solver.assert(BoolExpr::DlLe(b, a, rug::Rational::from(0)));
 
         assert!(solver.propagate().is_ok());
-        assert_eq!(solver.get_time_bounds(b), solver.get_time_bounds(a), "b == a == 0");
+        assert_eq!(solver.get_dl_bounds(b), solver.get_dl_bounds(a), "b == a == 0");
     }
 
     #[test]
     fn test_dl_backtracking_via_push_pop() {
         let mut solver = SeMiTONE::new();
-        let zero = solver.new_time_point();
-        let t1 = solver.new_time_point();
+        let zero = solver.new_dl_var();
+        let t1 = solver.new_dl_var();
 
         solver.push();
         let _ = solver.assert(BoolExpr::DlLe(zero, t1, rug::Rational::from(4)));
         assert!(solver.propagate().is_ok());
-        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(4));
+        assert_eq!(solver.get_dl_bounds(t1).1, InfRational::from(4));
         solver.pop();
 
-        assert_eq!(solver.get_time_bounds(t1).1, InfRational::from(Rational::PositiveInf), "the constraint must disappear after the pop");
+        assert_eq!(solver.get_dl_bounds(t1).1, InfRational::from(Rational::PositiveInf), "the constraint must disappear after the pop");
     }
 
     #[test]
@@ -1466,14 +1471,14 @@ mod tests {
         // at the SAT level the literal already registered for DlLe (it does not call mk_dl_ge).
         // This exercises the `(DlLeq(..), false)` branch of `propagate()`.
         let mut solver = SeMiTONE::new();
-        let a = solver.new_time_point();
-        let b = solver.new_time_point();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
 
         let neg_le = BoolExpr::Not(Box::new(BoolExpr::DlLe(a, b, rug::Rational::from(4))));
         let _ = solver.assert(neg_le);
         assert!(solver.propagate().is_ok());
 
-        let (lb_b, _) = solver.get_time_bounds(b);
+        let (lb_b, _) = solver.get_dl_bounds(b);
         assert!(lb_b > InfRational::from(4), "!(b - a <= 4) must imply b - a > 4, found lb(b) = {:?}", lb_b);
     }
 }

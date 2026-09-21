@@ -55,11 +55,11 @@ impl fmt::Display for FuncId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EufVar(pub(crate) usize);
+pub struct EufNode(pub(crate) usize);
 
-impl fmt::Display for EufVar {
+impl fmt::Display for EufNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "u{}", self.0)
+        write!(f, "n{}", self.0)
     }
 }
 
@@ -515,8 +515,8 @@ impl fmt::Display for ArithExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EufExpr {
-    Var(EufVar),
-    App(FuncId, Vec<Expr>),
+    Var(EufNode),
+    App(EufNode, FuncId, Vec<Expr>),
 }
 
 impl EufExpr {
@@ -529,8 +529,8 @@ impl fmt::Display for EufExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             EufExpr::Var(n) => write!(f, "{}", n),
-            EufExpr::App(func_id, args) => {
-                let args_str: Vec<String> = args.iter().map(|a| format!("{}", a)).collect();
+            EufExpr::App(n, func_id, args) => {
+                let args_str: Vec<String> = args.iter().map(|e| format!("{}", e)).collect();
                 write!(f, "{}({})", func_id, args_str.join(", "))
             }
         }

@@ -4,7 +4,7 @@ use crate::Lit;
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(super) enum Term {
+enum Term {
     Var(usize),
     App(usize, Vec<usize>),
 }
@@ -33,7 +33,7 @@ struct ProofEdge {
 pub(super) struct EufTheory {
     parents: Vec<usize>,
     sizes: Vec<usize>,
-    pub(super) terms: Vec<Term>,
+    terms: Vec<Term>,
     sig_table: FxHashMap<Signature, usize>,
     use_list: Vec<Vec<usize>>,
     pending_merges: Vec<(usize, usize)>,
@@ -61,7 +61,16 @@ impl EufTheory {
         }
     }
 
-    pub(super) fn add_term(&mut self, term: Term) -> usize {
+    pub(super) fn new_var(&mut self) -> usize {
+        let id = self.terms.len();
+        self.add_term_internal(Term::Var(id))
+    }
+
+    pub(super) fn new_app(&mut self, func_id: usize, args: Vec<usize>) -> usize {
+        self.add_term_internal(Term::App(func_id, args))
+    }
+
+    fn add_term_internal(&mut self, term: Term) -> usize {
         let id = self.terms.len();
 
         self.parents.push(id);
@@ -290,9 +299,9 @@ mod tests {
     #[test]
     fn test_basic_union_find() {
         let mut euf = EufTheory::new();
-        let a = euf.add_term(Term::Var(0));
-        let b = euf.add_term(Term::Var(1));
-        let c = euf.add_term(Term::Var(2));
+        let a = euf.new_var();
+        let b = euf.new_var();
+        let c = euf.new_var();
 
         assert_ne!(euf.find(a), euf.find(b));
 
@@ -310,13 +319,13 @@ mod tests {
     #[test]
     fn test_congruence_closure() {
         let mut euf = EufTheory::new();
-        let x = euf.add_term(Term::Var(0));
-        let y = euf.add_term(Term::Var(1));
+        let x = euf.new_var();
+        let y = euf.new_var();
 
         // f(x) and f(y)
         let f_id = 100;
-        let fx = euf.add_term(Term::App(f_id, vec![x]));
-        let fy = euf.add_term(Term::App(f_id, vec![y]));
+        let fx = euf.new_app(f_id, vec![x]);
+        let fy = euf.new_app(f_id, vec![y]);
 
         assert_ne!(euf.find(fx), euf.find(fy));
 
@@ -331,18 +340,18 @@ mod tests {
     #[test]
     fn test_nested_congruence_closure() {
         let mut euf = EufTheory::new();
-        let x = euf.add_term(Term::Var(0));
-        let y = euf.add_term(Term::Var(1));
+        let x = euf.new_var();
+        let y = euf.new_var();
 
         // f(x) and f(y)
         let f_id = 100;
-        let fx = euf.add_term(Term::App(f_id, vec![x]));
-        let fy = euf.add_term(Term::App(f_id, vec![y]));
+        let fx = euf.new_app(f_id, vec![x]);
+        let fy = euf.new_app(f_id, vec![y]);
 
         // g(f(x)) and g(f(y))
         let g_id = 200;
-        let gfx = euf.add_term(Term::App(g_id, vec![fx]));
-        let gfy = euf.add_term(Term::App(g_id, vec![fy]));
+        let gfx = euf.new_app(g_id, vec![fx]);
+        let gfy = euf.new_app(g_id, vec![fy]);
 
         // Assert x = y. This must trigger a chain reaction!
         euf.merge(x, y, Some(Lit::new(1, false)));
@@ -355,9 +364,9 @@ mod tests {
     #[test]
     fn test_backtracking() {
         let mut euf = EufTheory::new();
-        let a = euf.add_term(Term::Var(0));
-        let b = euf.add_term(Term::Var(1));
-        let c = euf.add_term(Term::Var(2));
+        let a = euf.new_var();
+        let b = euf.new_var();
+        let c = euf.new_var();
 
         // Level 0: a = b
         euf.merge(a, b, Some(Lit::new(1, false)));
@@ -381,10 +390,10 @@ mod tests {
     #[test]
     fn test_proof_forest_explain() {
         let mut euf = EufTheory::new();
-        let a = euf.add_term(Term::Var(0));
-        let b = euf.add_term(Term::Var(1));
-        let c = euf.add_term(Term::Var(2));
-        let d = euf.add_term(Term::Var(3));
+        let a = euf.new_var();
+        let b = euf.new_var();
+        let c = euf.new_var();
+        let d = euf.new_var();
 
         let l1 = Lit::new(1, false);
         let l2 = Lit::new(2, false);
@@ -409,9 +418,9 @@ mod tests {
     #[test]
     fn test_disequality_conflict() {
         let mut euf = EufTheory::new();
-        let a = euf.add_term(Term::Var(0));
-        let b = euf.add_term(Term::Var(1));
-        let c = euf.add_term(Term::Var(2));
+        let a = euf.new_var();
+        let b = euf.new_var();
+        let c = euf.new_var();
 
         let lit_a_eq_b = Lit::new(1, false);
         let lit_b_eq_c = Lit::new(2, false);
@@ -440,8 +449,8 @@ mod tests {
     #[test]
     fn test_disequality_immediate_conflict() {
         let mut euf = EufTheory::new();
-        let a = euf.add_term(Term::Var(0));
-        let b = euf.add_term(Term::Var(1));
+        let a = euf.new_var();
+        let b = euf.new_var();
 
         let lit_a_eq_b = Lit::new(1, false);
         let lit_a_neq_b = Lit::new(2, false);
@@ -461,12 +470,12 @@ mod tests {
     #[test]
     fn test_explain_through_congruence() {
         let mut euf = EufTheory::new();
-        let x = euf.add_term(Term::Var(0));
-        let y = euf.add_term(Term::Var(1));
+        let x = euf.new_var();
+        let y = euf.new_var();
 
         let f_id = 100;
-        let fx = euf.add_term(Term::App(f_id, vec![x]));
-        let fy = euf.add_term(Term::App(f_id, vec![y]));
+        let fx = euf.new_app(f_id, vec![x]);
+        let fy = euf.new_app(f_id, vec![y]);
 
         let lit_xy = Lit::new(1, false);
         let lit_fx_neq_fy = Lit::new(2, false); // SAT asserts f(x) != f(y)
