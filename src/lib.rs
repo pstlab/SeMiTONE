@@ -474,6 +474,24 @@ impl SeMiTONE {
                     InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
                 };
 
+                if self.sat_solver.decision_level() == 0 {
+                    if is_upper_bound {
+                        if self.lra_theory.ub(*var) <= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.lb(*var) > &bound {
+                            return Lit::FALSE;
+                        }
+                    } else {
+                        if self.lra_theory.lb(*var) >= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.ub(*var) < &bound {
+                            return Lit::FALSE;
+                        }
+                    }
+                }
+
                 let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
@@ -489,6 +507,15 @@ impl SeMiTONE {
                     InfRational::new(Rational::Finite(-const_term), eps_shift)
                 };
 
+                if self.sat_solver.decision_level() == 0 {
+                    if self.lra_theory.ub(slack) <= &bound {
+                        return Lit::TRUE;
+                    }
+                    if self.lra_theory.lb(slack) > &bound {
+                        return Lit::FALSE;
+                    }
+                }
+
                 let bound = TheoryConstraint::LraUb(slack, bound);
                 self.get_or_create_proxy(bound)
             }
@@ -502,6 +529,12 @@ impl SeMiTONE {
 
         let le_lit = self.mk_le(e1, e2, false);
         let ge_lit = self.mk_ge(e1, e2, false);
+        if le_lit == Lit::TRUE && ge_lit == Lit::TRUE {
+            return Lit::TRUE;
+        }
+        if le_lit == Lit::FALSE || ge_lit == Lit::FALSE {
+            return Lit::FALSE;
+        }
 
         let proxy_var = self.sat_solver.mk_var();
         let p = Lit::new(proxy_var, false);
@@ -542,6 +575,24 @@ impl SeMiTONE {
                     InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
                 };
 
+                if self.sat_solver.decision_level() == 0 {
+                    if is_upper_bound {
+                        if self.lra_theory.ub(*var) <= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.lb(*var) > &bound {
+                            return Lit::FALSE;
+                        }
+                    } else {
+                        if self.lra_theory.lb(*var) >= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.ub(*var) < &bound {
+                            return Lit::FALSE;
+                        }
+                    }
+                }
+
                 let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
                 self.get_or_create_proxy(bound)
             }
@@ -556,6 +607,15 @@ impl SeMiTONE {
                     let eps_shift = if strict { rug::Rational::from(1) } else { rug::Rational::from(0) };
                     InfRational::new(Rational::Finite(-const_term), eps_shift)
                 };
+
+                if self.sat_solver.decision_level() == 0 {
+                    if self.lra_theory.lb(slack) >= &bound {
+                        return Lit::TRUE;
+                    }
+                    if self.lra_theory.ub(slack) < &bound {
+                        return Lit::FALSE;
+                    }
+                }
 
                 let bound = TheoryConstraint::LraLb(slack, bound);
                 self.get_or_create_proxy(bound)
