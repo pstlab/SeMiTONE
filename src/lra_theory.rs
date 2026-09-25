@@ -118,7 +118,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: usize, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("[{:?}] Setting lower bound of variable {} to {}", lit, var, new_lb);
+        trace!("{}{} ≥ {}", if let Some(l) = lit { format!("[{l}]") } else { "".to_string() }, var, new_lb);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_lb <= self.lb(var) {
@@ -140,7 +140,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: usize, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("[{:?}] Setting upper bound of variable {} to {}", lit, var, new_ub);
+        trace!("{}{} ≤ {}", if let Some(l) = lit { format!("[{l}]") } else { "".to_string() }, var, new_ub);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {
