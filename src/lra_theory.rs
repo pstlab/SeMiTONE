@@ -111,7 +111,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: usize, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("{}{} ≥ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_lb);
+        trace!("{}{}{} ≥ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_lb);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_lb <= self.lb(var) {
@@ -133,7 +133,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: usize, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("{}{}{} ≤ {}", if self.is_int_var(var) { "i" } else { "r" }, if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_ub);
+        trace!("{}{}{} ≤ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_ub);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {
