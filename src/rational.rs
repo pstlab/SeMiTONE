@@ -389,9 +389,44 @@ impl InfRational {
         &self.inf
     }
 
-    /// Consumes the value and returns its two components.
-    pub fn into_parts(self) -> (Rational, rug::Rational) {
-        (self.rat, self.inf)
+    /// Returns `true` when the value is finite.
+    pub fn is_finite(&self) -> bool {
+        self.rat.is_finite()
+    }
+
+    /// Returns `true` when the value is strictly positive.
+    pub fn is_positive(&self) -> bool {
+        self.rat.is_positive() || (self.rat.is_zero() && self.inf.is_positive())
+    }
+
+    /// Returns `true` when the value is strictly negative.
+    pub fn is_negative(&self) -> bool {
+        self.rat.is_negative() || (self.rat.is_zero() && self.inf.is_negative())
+    }
+
+    /// Returns `true` when the value is an integer.
+    pub fn is_integer(&self) -> bool {
+        self.rat.is_integer() && self.inf.is_zero()
+    }
+
+    /// Returns `true` when the value is equal to zero.
+    pub fn is_zero(&self) -> bool {
+        self.rat.is_zero() && self.inf.is_zero()
+    }
+
+    /// Creates a new InfRational representing zero.
+    pub fn zero() -> InfRational {
+        InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0))
+    }
+
+    /// Creates a new InfRational representing negative infinity.
+    pub fn negative_inf() -> InfRational {
+        InfRational::new(Rational::NegativeInf, rug::Rational::from(0))
+    }
+
+    /// Creates a new InfRational representing positive infinity.
+    pub fn positive_inf() -> InfRational {
+        InfRational::new(Rational::PositiveInf, rug::Rational::from(0))
     }
 }
 

@@ -863,7 +863,7 @@ dependencies = [
 
 [[package]]
 name = "semitone"
-version = "0.0.23"
+version = "0.0.24"
 dependencies = [
  "criterion",
  "num-traits",

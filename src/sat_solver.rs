@@ -1,7 +1,6 @@
+use crate::out_of_bounds;
 use std::{collections::VecDeque, fmt, mem, ops};
 use tracing::trace;
-
-use crate::out_of_bounds;
 
 pub(super) struct SatSolver {
     pub(super) assigns: Vec<Option<bool>>, // Current assignments of boolean variables (None = unassigned, Some(true/false) = assigned)
@@ -38,6 +37,7 @@ impl SatSolver {
 
     pub(super) fn mk_var(&mut self) -> usize {
         let idx = self.assigns.len();
+        trace!("Creating new variable b{}", idx);
         self.assigns.push(None);
         self.watches.push(Vec::new());
         self.watches.push(Vec::new()); // For the negated literal

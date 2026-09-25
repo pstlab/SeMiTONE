@@ -3,7 +3,7 @@ use crate::{
     rational::{InfRational, Rational},
     sat_solver::Lit,
 };
-use rug::{Assign, Rational as RugRational};
+use rug::Assign;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::{collections::BTreeMap, mem};
 use tracing::trace;
@@ -18,7 +18,7 @@ pub(super) struct LraTheory {
     pub(super) t_watches: Vec<FxHashSet<usize>>,          // For each variable, the set of tableau rows containing it
     bound_trail: Vec<BoundUpdate>,                        // Trail of bound updates for backtracking
     trail_lim: Vec<usize>,                                // Trail limits
-    rational_pool: Vec<RugRational>,                      // Pool of rational numbers for reuse
+    rational_pool: Vec<rug::Rational>,                    // Pool of rational numbers for reuse
 }
 
 impl LraTheory {
@@ -37,43 +37,36 @@ impl LraTheory {
         }
     }
 
+    /// Creates a new integer variable and returns its index.
     pub(super) fn mk_int(&mut self) -> usize {
         self.mk_var(true)
     }
 
+    /// Creates a new real variable and returns its index.
     pub(super) fn mk_real(&mut self) -> usize {
         self.mk_var(false)
     }
 
+    /// Creates a new variable (integer or real) and returns its index.
     fn mk_var(&mut self, is_int: bool) -> usize {
         let var = self.reals.len();
-        trace!("Created new {} variable with index {}", if is_int { "int" } else { "real" }, var);
+        trace!("Creating new variable {}{var}", if is_int { "i" } else { "r" });
         self.ints.push(is_int);
-        self.reals.push(Self::zero());
-        self.lbs.push((None, Self::negative_inf()));
-        self.ubs.push((None, Self::positive_inf()));
+        self.reals.push(InfRational::zero());
+        self.lbs.push((None, InfRational::negative_inf()));
+        self.ubs.push((None, InfRational::positive_inf()));
         self.t_watches.push(FxHashSet::default());
         var
     }
 
+    /// Checks if a variable is an integer variable.
     pub fn is_int_var(&self, var: usize) -> bool {
         self.ints[var]
     }
 
+    /// Checks if a linear expression consists only of integer variables with integer coefficients.
     pub fn is_int_expr(&self, expr: &SparseRow) -> bool {
         expr.iter().all(|(var, coeff)| self.ints[*var] && coeff.is_integer())
-    }
-
-    fn zero() -> InfRational {
-        InfRational::new(Rational::Finite(RugRational::from(0)), RugRational::from(0))
-    }
-
-    fn negative_inf() -> InfRational {
-        InfRational::new(Rational::NegativeInf, RugRational::from(0))
-    }
-
-    fn positive_inf() -> InfRational {
-        InfRational::new(Rational::PositiveInf, RugRational::from(0))
     }
 
     #[inline]
@@ -82,7 +75,7 @@ impl LraTheory {
     }
 
     fn row_value(&self, row: &SparseRow) -> InfRational {
-        row.iter().fold(Self::zero(), |mut acc, (v, c)| {
+        row.iter().fold(InfRational::zero(), |mut acc, (v, c)| {
             acc += &self.reals[*v] * c;
             acc
         })
@@ -140,7 +133,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: usize, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("{}{} ≤ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_ub);
+        trace!("{}{}{} ≤ {}", if self.is_int_var(var) { "i" } else { "r" }, if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_ub);
         assert!(var < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {
@@ -173,7 +166,7 @@ impl LraTheory {
         let old_value = self.reals[var].clone();
         let delta_var = &new_value - &old_value;
 
-        if delta_var == Self::zero() {
+        if delta_var.is_zero() {
             return;
         }
 
@@ -469,7 +462,7 @@ impl LraTheory {
 
         loop {
             let mut entering: Option<(usize, bool)> = None;
-            let mut best_magnitude: Option<RugRational> = None;
+            let mut best_magnitude: Option<rug::Rational> = None;
 
             for (v, coeff) in obj_row.iter() {
                 if !coeff.is_positive() && !coeff.is_negative() {
@@ -536,7 +529,7 @@ impl LraTheory {
             }
 
             match (leaving, leaving_target) {
-                (None, None) => return if maximize { Self::positive_inf() } else { Self::negative_inf() },
+                (None, None) => return if maximize { InfRational::positive_inf() } else { InfRational::negative_inf() },
                 (None, Some(new_value)) => {
                     self.update(entering_var, new_value); // bound flip, obj_row remains valid
                 }
@@ -560,7 +553,7 @@ impl LraTheory {
             let coeff = row.remove(&basic_var).expect("just found in row");
             let basic_row = &self.tableau[&basic_var];
             for (v, c) in basic_row.iter() {
-                let mut delta = RugRational::from(0);
+                let mut delta = rug::Rational::from(0);
                 delta.assign(c * &coeff);
                 row.add_coeff(*v, &delta);
             }
@@ -590,7 +583,7 @@ pub(super) fn tighten_int_bound(mut r: rug::Rational, is_upper: bool, strict: bo
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SparseRow {
-    pub terms: Vec<(usize, RugRational)>,
+    pub terms: Vec<(usize, rug::Rational)>,
 }
 
 impl SparseRow {
@@ -606,28 +599,28 @@ impl SparseRow {
         self.terms.len()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, (usize, RugRational)> {
+    pub fn iter(&self) -> std::slice::Iter<'_, (usize, rug::Rational)> {
         self.terms.iter()
     }
 
-    pub fn get(&self, var: &usize) -> Option<&RugRational> {
+    pub fn get(&self, var: &usize) -> Option<&rug::Rational> {
         self.terms.binary_search_by_key(var, |&(v, _)| v).ok().map(|idx| &self.terms[idx].1)
     }
 
-    pub fn insert(&mut self, var: usize, coeff: RugRational) {
+    pub fn insert(&mut self, var: usize, coeff: rug::Rational) {
         match self.terms.binary_search_by_key(&var, |&(v, _)| v) {
             Ok(idx) => self.terms[idx].1 = coeff,
             Err(idx) => self.terms.insert(idx, (var, coeff)),
         }
     }
 
-    pub fn remove(&mut self, var: &usize) -> Option<RugRational> {
+    pub fn remove(&mut self, var: &usize) -> Option<rug::Rational> {
         self.terms.binary_search_by_key(var, |&(v, _)| v).ok().map(|idx| self.terms.remove(idx).1)
     }
 
     pub fn retain<F>(&mut self, mut f: F)
     where
-        F: FnMut(&usize, &mut RugRational) -> bool,
+        F: FnMut(&usize, &mut rug::Rational) -> bool,
     {
         self.terms.retain_mut(|(v, c)| f(v, c));
     }
@@ -636,11 +629,11 @@ impl SparseRow {
         self.terms.iter().map(|(v, _)| v)
     }
 
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut RugRational> {
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut rug::Rational> {
         self.terms.iter_mut().map(|(_, c)| c)
     }
 
-    pub fn add_coeff(&mut self, var: usize, delta: &RugRational) {
+    pub fn add_coeff(&mut self, var: usize, delta: &rug::Rational) {
         if delta.is_zero() {
             return;
         }
@@ -654,7 +647,7 @@ impl SparseRow {
         }
     }
 
-    fn add_scaled_untracked(&mut self, other: &SparseRow, scale: &RugRational) {
+    fn add_scaled_untracked(&mut self, other: &SparseRow, scale: &rug::Rational) {
         let old_terms = std::mem::take(&mut self.terms);
         let mut new_terms = Vec::with_capacity(old_terms.len());
 
@@ -666,7 +659,7 @@ impl SparseRow {
                 new_terms.push(old_iter.next().unwrap());
             } else if v1 > v2 {
                 let (v2, c2) = other_iter.next().unwrap();
-                let mut delta = RugRational::from(0);
+                let mut delta = rug::Rational::from(0);
                 delta.assign(c2 * scale);
                 if !delta.is_zero() {
                     new_terms.push((*v2, delta));
@@ -674,7 +667,7 @@ impl SparseRow {
             } else {
                 let (v1, mut c1) = old_iter.next().unwrap();
                 let (_, c2) = other_iter.next().unwrap();
-                let mut tmp = RugRational::from(0);
+                let mut tmp = rug::Rational::from(0);
                 tmp.assign(c2 * scale);
                 c1 += tmp;
                 if !c1.is_zero() {
@@ -685,7 +678,7 @@ impl SparseRow {
 
         new_terms.extend(old_iter);
         for (v2, c2) in other_iter {
-            let mut delta = RugRational::from(0);
+            let mut delta = rug::Rational::from(0);
             delta.assign(c2 * scale);
             if !delta.is_zero() {
                 new_terms.push((*v2, delta));
@@ -695,7 +688,7 @@ impl SparseRow {
         self.terms = new_terms;
     }
 
-    fn add_scaled(&mut self, other: &SparseRow, scale: &RugRational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<RugRational>) {
+    fn add_scaled(&mut self, other: &SparseRow, scale: &rug::Rational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<rug::Rational>) {
         let old_terms = std::mem::take(&mut self.terms);
         let mut new_terms = Vec::with_capacity(old_terms.len());
 
@@ -755,8 +748,8 @@ impl SparseRow {
 }
 
 impl<'a> IntoIterator for &'a SparseRow {
-    type Item = &'a (usize, RugRational);
-    type IntoIter = std::slice::Iter<'a, (usize, RugRational)>;
+    type Item = &'a (usize, rug::Rational);
+    type IntoIter = std::slice::Iter<'a, (usize, rug::Rational)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.terms.iter()
@@ -771,12 +764,11 @@ enum BoundUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rug::Rational as RugRational;
 
     fn add_test_row(theory: &mut LraTheory, basic_var: usize, terms: &[(usize, i32)]) {
         let mut row = SparseRow::new();
         for &(var, coeff) in terms {
-            row.insert(var, RugRational::from(coeff));
+            row.insert(var, rug::Rational::from(coeff));
             theory.t_watches[var].insert(basic_var);
         }
         theory.tableau.insert(basic_var, row);
@@ -785,7 +777,7 @@ mod tests {
     fn build_row(terms: &[(usize, i32)]) -> SparseRow {
         let mut row = SparseRow::new();
         for &(var, coeff) in terms {
-            row.insert(var, RugRational::from(coeff));
+            row.insert(var, rug::Rational::from(coeff));
         }
         row
     }
@@ -813,8 +805,8 @@ mod tests {
         assert!(lra.t_watches[s].contains(&y), "s should now be watched by y after pivoting");
 
         let row_y = lra.tableau.get(&y).expect("y must have a row in the tableau");
-        assert_eq!(row_y.get(&x).unwrap(), &RugRational::from((2, 3)));
-        assert_eq!(row_y.get(&s).unwrap(), &RugRational::from((-1, 3)));
+        assert_eq!(row_y.get(&x).unwrap(), &rug::Rational::from((2, 3)));
+        assert_eq!(row_y.get(&s).unwrap(), &rug::Rational::from((-1, 3)));
     }
 
     #[test]
@@ -915,14 +907,14 @@ mod tests {
         watches[1].insert(target_row);
         watches[3].insert(target_row);
 
-        let scale = RugRational::from(-3);
+        let scale = rug::Rational::from(-3);
         row1.add_scaled(&row2, &scale, &mut watches, target_row, rational_pool);
 
         assert_eq!(row1.len(), 3, "The row should have exactly 3 active terms");
-        assert_eq!(row1.get(&0), Some(&RugRational::from(2)));
+        assert_eq!(row1.get(&0), Some(&rug::Rational::from(2)));
         assert_eq!(row1.get(&1), None, "v1 should have been removed from the row");
-        assert_eq!(row1.get(&2), Some(&RugRational::from(-12)));
-        assert_eq!(row1.get(&3), Some(&RugRational::from(-7)));
+        assert_eq!(row1.get(&2), Some(&rug::Rational::from(-12)));
+        assert_eq!(row1.get(&3), Some(&rug::Rational::from(-7)));
 
         assert!(watches[0].contains(&target_row), "The watch for v0 should remain unchanged");
         assert!(!watches[1].contains(&target_row), "The watch for v1 should have been removed because the coefficient became zero");
@@ -950,9 +942,9 @@ mod tests {
 
         let row_s1 = lra.tableau.get(&s1).expect("s1 should still be present in the tableau");
 
-        assert_eq!(row_s1.get(&s2), Some(&RugRational::from(2)));
-        assert_eq!(row_s1.get(&y), Some(&RugRational::from(3)));
-        assert_eq!(row_s1.get(&z), Some(&RugRational::from(-5)));
+        assert_eq!(row_s1.get(&s2), Some(&rug::Rational::from(2)));
+        assert_eq!(row_s1.get(&y), Some(&rug::Rational::from(3)));
+        assert_eq!(row_s1.get(&z), Some(&rug::Rational::from(-5)));
 
         assert_eq!(row_s1.get(&x), None, "x is now basic, so it cannot appear in s1");
 
@@ -1004,7 +996,7 @@ mod tests {
         let obj = build_row(&[(x, 1)]);
         let result = lra.optimize(obj, true);
 
-        assert_eq!(result, LraTheory::positive_inf());
+        assert_eq!(result, InfRational::positive_inf());
     }
 
     #[test]
@@ -1092,7 +1084,7 @@ mod tests {
         let canon = lra.canonicalize(row);
 
         assert_eq!(canon.get(&s), None, "s should be eliminated from the canonicalized row");
-        assert_eq!(canon.get(&x), Some(&RugRational::from(3)));
-        assert_eq!(canon.get(&y), Some(&RugRational::from(6)));
+        assert_eq!(canon.get(&x), Some(&rug::Rational::from(3)));
+        assert_eq!(canon.get(&y), Some(&rug::Rational::from(6)));
     }
 }
