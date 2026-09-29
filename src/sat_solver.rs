@@ -301,8 +301,9 @@ impl SatSolver {
         self.trail_lim.len()
     }
 
-    pub(super) fn cancel_until(&mut self, level: usize) {
+    pub(super) fn cancel_until(&mut self, level: usize) -> Vec<Lit> {
         trace!("Canceling until level {}", level);
+        let mut retracted = Vec::new();
         while self.decision_level() > level {
             let lim = self.trail_lim.pop().unwrap();
             while self.trail.len() > lim {
@@ -311,8 +312,10 @@ impl SatSolver {
                 self.assigns[lit.var()] = None;
                 self.reason[lit.var()] = None;
                 self.level[lit.var()] = None;
+                retracted.push(lit);
             }
         }
+        retracted
     }
 }
 

@@ -785,13 +785,17 @@ impl SeMiTONE {
     ///
     /// This restores SAT/theory state to the requested level and drops pending
     /// notifications beyond the restored trail.
-    pub fn cancel_until(&mut self, level: usize) {
-        self.sat_solver.cancel_until(level);
+    /// Returns the list of retracted literals in reverse chronological order (LIFO).
+    pub fn cancel_until(&mut self, level: usize) -> Vec<Lit> {
+        let retracted = self.sat_solver.cancel_until(level);
         self.lra_theory.cancel_until(level);
         self.enum_theory.cancel_until(level);
         self.dl_theory.cancel_until(level);
         self.euf_theory.cancel_until(level);
+
         self.notified_len = self.sat_solver.trail.len();
+
+        retracted
     }
 
     /// Returns the trail suffix starting at `from_index`.
