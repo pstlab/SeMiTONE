@@ -820,19 +820,6 @@ impl SeMiTONE {
         self.sat_solver.trail.len()
     }
 
-    /// Returns the trail length recorded at a specific decision level.
-    ///
-    /// If `level` is beyond the current number of levels, returns the current
-    /// trail length.
-    pub fn get_trail_len_at_level(&self, level: usize) -> usize {
-        if level < self.sat_solver.trail_lim.len() { self.sat_solver.trail_lim[level] } else { self.sat_solver.trail.len() }
-    }
-
-    /// Returns a slice of the trail between `start` (inclusive) and `end` (exclusive).
-    pub fn get_trail_slice(&self, start: usize, end: usize) -> &[Lit] {
-        &self.sat_solver.trail[start..end]
-    }
-
     /// Returns the number of currently active user scopes (`push`/`pop`).
     pub fn user_scopes_len(&self) -> usize {
         self.sat_solver.floor_level()

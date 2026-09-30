@@ -20,11 +20,10 @@ impl Solver {
         self.heuristic.sync_with_solver(self.smt.num_vars());
         loop {
             if let Err((bt_level, lemma)) = self.smt.propagate() {
-                for lit in self.smt.get_trail_delta(self.smt.get_trail_len_at_level(bt_level)) {
+                for lit in self.smt.cancel_until(bt_level) {
                     self.heuristic.save_phase(lit.var(), lit.sign());
                     self.heuristic.insert_unassigned(lit.var());
                 }
-                self.smt.cancel_until(bt_level);
 
                 for lit in &lemma {
                     self.heuristic.bump_activity(lit.var());
@@ -42,11 +41,10 @@ impl Solver {
                 self.smt.decide(Lit::new(var, polarity));
             } else if let Err((bt_level, lemma)) = self.smt.check_ints() {
                 self.heuristic.sync_with_solver(self.smt.num_vars());
-                for lit in self.smt.get_trail_delta(self.smt.get_trail_len_at_level(bt_level)) {
+                for lit in self.smt.cancel_until(bt_level) {
                     self.heuristic.save_phase(lit.var(), lit.sign());
                     self.heuristic.insert_unassigned(lit.var());
                 }
-                self.smt.cancel_until(bt_level);
 
                 for lit in &lemma {
                     self.heuristic.bump_activity(lit.var());
