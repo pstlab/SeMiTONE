@@ -12,6 +12,13 @@ use std::{
 };
 use tracing::{error, warn};
 
+#[derive(Clone)]
+struct EufFunction {
+    id: FuncId,
+    parameters: Vec<String>,
+    result: String,
+}
+
 /// SMT-LIB parser built on top of the solver.
 ///
 /// It reads commands from a string or file and writes SAT/UNSAT responses to the
@@ -21,12 +28,15 @@ pub struct SmtParser<'a> {
     bool_vars: FxHashMap<String, BoolExpr>,
     arith_vars: FxHashMap<String, ArithExpr>,
     euf_vars: FxHashMap<String, EufExpr>,
-    euf_funcs: FxHashMap<String, FuncId>,
+    euf_funcs: FxHashMap<String, EufFunction>,
+    euf_var_sorts: FxHashMap<String, String>,
     custom_sorts: FxHashSet<String>,
     var_sorts: FxHashMap<String, String>,
     purified_bool_vars: Vec<(EufExpr, BoolExpr)>,
     purified_arith_vars: Vec<(EufExpr, ArithExpr, String)>,
     is_unsat: bool,
+    unsat_scopes: Vec<bool>,
+    last_check_sat: Option<bool>,
     writer: &'a mut dyn Write,
 }
 
@@ -39,11 +49,14 @@ impl<'a> SmtParser<'a> {
             arith_vars: FxHashMap::default(),
             euf_vars: FxHashMap::default(),
             euf_funcs: FxHashMap::default(),
+            euf_var_sorts: FxHashMap::default(),
             custom_sorts: FxHashSet::default(),
             var_sorts: FxHashMap::default(),
             purified_bool_vars: Vec::new(),
             purified_arith_vars: Vec::new(),
             is_unsat: false,
+            unsat_scopes: Vec::new(),
+            last_check_sat: None,
             writer,
         }
     }
@@ -117,12 +130,21 @@ impl<'a> SmtParser<'a> {
                         }
                         _ if self.custom_sorts.contains(&sort_name) => {
                             let v = self.solver.smt.new_euf_var();
-                            self.euf_vars.insert(name.to_string(), v);
+                            self.euf_vars.insert(name.clone(), v);
+                            self.euf_var_sorts.insert(name, sort_name);
                         }
                         _ => panic!("Unsupported sort: {}", sort_name),
                     }
                 } else {
-                    self.euf_funcs.insert(name, self.solver.smt.new_euf_func());
+                    let parameters = parameters.iter().map(|sort| self.sort_name(sort)).collect::<Result<Vec<_>, _>>();
+                    let parameters = match parameters {
+                        Ok(parameters) => parameters,
+                        Err(message) => {
+                            self.write_error(&message);
+                            return;
+                        }
+                    };
+                    self.euf_funcs.insert(name, EufFunction { id: self.solver.smt.new_euf_func(), parameters, result: sort_name });
                 }
             }
             concrete::Command::Assert { term } => {
@@ -130,7 +152,12 @@ impl<'a> SmtParser<'a> {
                     return; // Skip further assertions if already trivially unsat
                 }
 
+                if let Err(message) = self.validate_bool_term(&term) {
+                    self.write_error(&message);
+                    return;
+                }
                 let bool_expr = self.translate_bool_term(&term);
+                self.last_check_sat = None;
                 if self.solver.smt.assert(&bool_expr).is_err() {
                     self.is_unsat = true;
                 }
@@ -138,8 +165,11 @@ impl<'a> SmtParser<'a> {
             concrete::Command::CheckSat => {
                 if self.is_unsat {
                     writeln!(self.writer, "unsat").unwrap();
+                    self.last_check_sat = Some(false);
                 } else {
-                    match self.solver.check_sat() {
+                    let result = self.solver.check_sat();
+                    self.last_check_sat = result;
+                    match result {
                         Some(true) => writeln!(self.writer, "sat").unwrap(),
                         Some(false) => writeln!(self.writer, "unsat").unwrap(),
                         None => writeln!(self.writer, "unknown").unwrap(),
@@ -147,7 +177,7 @@ impl<'a> SmtParser<'a> {
                 }
             }
             concrete::Command::GetModel => {
-                if self.is_unsat {
+                if self.last_check_sat != Some(true) {
                     writeln!(self.writer, "(error \"get-model is only available after a successful check-sat\")").unwrap();
                     return;
                 }
@@ -164,8 +194,9 @@ impl<'a> SmtParser<'a> {
                 // Print Real/Integer assignments
                 for (name, var) in &self.arith_vars {
                     if let Some(val) = self.solver.smt.get_arith_val(var) {
+                        let sort = self.var_sorts.get(name).map(String::as_str).unwrap_or("Real");
                         let Rational::Finite(rat) = val.rational_part() else {
-                            writeln!(self.writer, "  (define-fun {} () Real <non-finite>)", name).unwrap();
+                            writeln!(self.writer, "  (define-fun {} () {} <non-finite>)", name, sort).unwrap();
                             continue;
                         };
                         let num = rat.numer();
@@ -173,9 +204,13 @@ impl<'a> SmtParser<'a> {
 
                         // Format as decimal if the denominator is 1, otherwise as an SMT-LIB division
                         if den == &rug::Integer::from(1) {
-                            writeln!(self.writer, "  (define-fun {} () Real {}.0)", name, num).unwrap();
+                            if sort == "Int" {
+                                writeln!(self.writer, "  (define-fun {} () Int {})", name, num).unwrap();
+                            } else {
+                                writeln!(self.writer, "  (define-fun {} () Real {}.0)", name, num).unwrap();
+                            }
                         } else {
-                            writeln!(self.writer, "  (define-fun {} () Real (/ {} {}))", name, num, den).unwrap();
+                            writeln!(self.writer, "  (define-fun {} () {} (/ {} {}))", name, sort, num, den).unwrap();
                         }
                     }
                 }
@@ -186,18 +221,159 @@ impl<'a> SmtParser<'a> {
                 let n = level.to_usize().unwrap_or_else(|| panic!("push level too large for usize: {}", level));
                 for _ in 0..n {
                     self.solver.smt.push();
+                    self.unsat_scopes.push(self.is_unsat);
                 }
+                self.last_check_sat = None;
             }
             concrete::Command::Pop { level } => {
                 let n = level.to_usize().unwrap_or_else(|| panic!("pop level too large for usize: {}", level));
                 for _ in 0..n {
                     self.solver.smt.pop();
+                    self.is_unsat = self.unsat_scopes.pop().unwrap_or(false);
                 }
-                // Reset trivial unsat flag upon popping
-                self.is_unsat = false;
+                self.last_check_sat = None;
             }
             _ => {} // Ignore other commands for now
         }
+    }
+
+    fn write_error(&mut self, message: &str) {
+        writeln!(self.writer, "(error \"{}\")", message.replace('"', "'")).unwrap();
+    }
+
+    fn sort_name(&self, sort: &concrete::Sort) -> Result<String, String> {
+        match sort {
+            concrete::Sort::Simple { identifier } => Ok(Self::symbol_of_identifier(identifier).to_string()),
+            concrete::Sort::Parameterized { .. } => Err("Complex sorts are not supported".to_string()),
+        }
+    }
+
+    fn validate_bool_term(&self, term: &concrete::Term) -> Result<(), String> {
+        match self.term_sort(term)?.as_str() {
+            "Bool" => Ok(()),
+            sort => Err(format!("Expected Boolean term, found {sort}")),
+        }
+    }
+
+    fn term_sort(&self, term: &concrete::Term) -> Result<String, String> {
+        match term {
+            concrete::Term::QualIdentifier(id) => {
+                let name = Self::symbol_of_qual_identifier(id);
+                if name == "true" || name == "false" || self.bool_vars.contains_key(name) {
+                    Ok("Bool".to_string())
+                } else if let Some(sort) = self.var_sorts.get(name) {
+                    Ok(sort.clone())
+                } else if let Some(sort) = self.euf_var_sorts.get(name) {
+                    Ok(sort.clone())
+                } else {
+                    Err(format!("Undeclared variable: {name}"))
+                }
+            }
+            concrete::Term::Constant(c) => match c {
+                concrete::Constant::Numeral(_) => Ok("Int".to_string()),
+                concrete::Constant::Decimal(_) => Ok("Real".to_string()),
+                _ => Err("Unsupported constant type".to_string()),
+            },
+            concrete::Term::Application { qual_identifier, arguments } => {
+                let op = Self::symbol_of_qual_identifier(qual_identifier);
+                match op {
+                    "and" | "or" => {
+                        for argument in arguments {
+                            self.validate_bool_term(argument)?;
+                        }
+                        Ok("Bool".to_string())
+                    }
+                    "not" => {
+                        if arguments.len() != 1 {
+                            return Err("not expects exactly one argument".to_string());
+                        }
+                        self.validate_bool_term(&arguments[0])?;
+                        Ok("Bool".to_string())
+                    }
+                    "=>" => {
+                        if arguments.len() != 2 {
+                            return Err("=> expects exactly two arguments".to_string());
+                        }
+                        self.validate_bool_term(&arguments[0])?;
+                        self.validate_bool_term(&arguments[1])?;
+                        Ok("Bool".to_string())
+                    }
+                    "<=" | ">=" | "<" | ">" => {
+                        self.validate_arith_comparison(arguments)?;
+                        Ok("Bool".to_string())
+                    }
+                    "=" => {
+                        if arguments.len() != 2 {
+                            return Err("= expects exactly two arguments".to_string());
+                        }
+                        let left = self.term_sort(&arguments[0])?;
+                        let right = self.term_sort(&arguments[1])?;
+                        if left != right && !(left == "Int" && right == "Real") && !(left == "Real" && right == "Int") {
+                            return Err(format!("Equality sort mismatch: {left} and {right}"));
+                        }
+                        Ok("Bool".to_string())
+                    }
+                    "+" | "*" | "-" | "/" | "div" | "mod" => self.arith_sort(term),
+                    name if self.euf_funcs.contains_key(name) => {
+                        let function = &self.euf_funcs[name];
+                        if arguments.len() != function.parameters.len() {
+                            return Err(format!("Function {name} expects {} arguments, got {}", function.parameters.len(), arguments.len()));
+                        }
+                        for (argument, expected) in arguments.iter().zip(&function.parameters) {
+                            let actual = self.term_sort(argument)?;
+                            if &actual != expected {
+                                return Err(format!("Function {name} expects {expected}, got {actual}"));
+                            }
+                        }
+                        Ok(function.result.clone())
+                    }
+                    _ => Err(format!("Unsupported operator: {op}")),
+                }
+            }
+            _ => Err("Unsupported term structure".to_string()),
+        }
+    }
+
+    fn validate_arith_comparison(&self, arguments: &[concrete::Term]) -> Result<(), String> {
+        if arguments.len() != 2 {
+            return Err("Arithmetic comparison expects exactly two arguments".to_string());
+        }
+        let left = self.term_sort(&arguments[0])?;
+        let right = self.term_sort(&arguments[1])?;
+        if !matches!(left.as_str(), "Int" | "Real") || !matches!(right.as_str(), "Int" | "Real") {
+            return Err("Arithmetic comparison expects arithmetic terms".to_string());
+        }
+        Ok(())
+    }
+
+    fn arith_sort(&self, term: &concrete::Term) -> Result<String, String> {
+        let concrete::Term::Application { qual_identifier, arguments } = term else {
+            return Err("Expected arithmetic application".to_string());
+        };
+        let op = Self::symbol_of_qual_identifier(qual_identifier);
+        let min_args = if op == "-" { 1 } else { 2 };
+        if arguments.len() < min_args || (matches!(op, "/" | "div" | "mod") && arguments.len() != 2) {
+            return Err(format!("{op} has invalid arity"));
+        }
+        let mut result = "Int";
+        for argument in arguments {
+            let sort = self.term_sort(argument)?;
+            if !matches!(sort.as_str(), "Int" | "Real") {
+                return Err(format!("{op} expects arithmetic arguments"));
+            }
+            if sort == "Real" {
+                result = "Real";
+            }
+        }
+        if matches!(op, "div" | "mod") {
+            if result != "Int" {
+                return Err(format!("{op} expects integer arguments"));
+            }
+            if arguments.iter().any(|argument| !matches!(argument, concrete::Term::Constant(_))) {
+                return Err(format!("Non-constant {op} is not supported"));
+            }
+        }
+        Ok(result.to_string())
     }
 
     fn symbol_of_identifier(id: &concrete::Identifier) -> &str {
@@ -374,7 +550,7 @@ impl<'a> SmtParser<'a> {
             concrete::Term::Application { qual_identifier, arguments } => {
                 let func_name = Self::symbol_of_qual_identifier(qual_identifier);
 
-                if let Some(&func_id) = self.euf_funcs.get(func_name) {
+                if let Some(function) = self.euf_funcs.get(func_name).cloned() {
                     let mut parsed_args = Vec::with_capacity(arguments.len());
 
                     for arg in arguments {
@@ -435,7 +611,7 @@ impl<'a> SmtParser<'a> {
                         }
                     }
 
-                    self.solver.smt.new_euf_app(func_id, parsed_args)
+                    self.solver.smt.new_euf_app(function.id, parsed_args)
                 } else {
                     panic!("Unknown function: {}", func_name);
                 }
@@ -555,6 +731,74 @@ mod tests {
             parser.run_str(script);
         }
         String::from_utf8(output).expect("Invalid UTF-8 output")
+    }
+
+    #[test]
+    fn test_integer_model_uses_integer_sort() {
+        let output = run_smt_script(
+            "\
+            (set-logic QF_LIA)
+            (declare-fun x () Int)
+            (assert (= x 1))
+            (check-sat)
+            (get-model)
+        ",
+        );
+        assert!(output.contains("(define-fun x () Int 1)"));
+        assert!(!output.contains("(define-fun x () Real"));
+    }
+
+    #[test]
+    fn test_get_model_requires_successful_check_sat() {
+        let output = run_smt_script(
+            "\
+            (set-logic QF_LIA)
+            (declare-fun x () Int)
+            (assert (= x 1))
+            (get-model)
+        ",
+        );
+        assert!(output.contains("get-model is only available after a successful check-sat"));
+    }
+
+    #[test]
+    fn test_pop_preserves_unsat_assertion_outside_scope() {
+        let output = run_smt_script(
+            "\
+            (set-logic QF_LIA)
+            (assert false)
+            (push 1)
+            (pop 1)
+            (check-sat)
+        ",
+        );
+        assert_eq!(output.trim(), "unsat");
+    }
+
+    #[test]
+    fn test_invalid_euf_application_is_reported() {
+        let output = run_smt_script(
+            "\
+            (set-logic QF_UF)
+            (declare-sort U 0)
+            (declare-fun a () U)
+            (declare-fun f (U) U)
+            (assert (= (f a a) (f a a)))
+        ",
+        );
+        assert!(output.contains("Function f expects 1 arguments, got 2"));
+    }
+
+    #[test]
+    fn test_unsupported_nonconstant_division_is_reported() {
+        let output = run_smt_script(
+            "\
+            (set-logic QF_LIA)
+            (declare-fun x () Int)
+            (assert (= (div x 2) 1))
+        ",
+        );
+        assert!(output.contains("Non-constant div is not supported"));
     }
 
     #[test]

@@ -456,12 +456,15 @@ mod regression_tests {
             let mut changed = false;
             for i in 0..terms.len() {
                 for j in i + 1..terms.len() {
-                    if let (Some((f, xs)), Some((g, ys))) = (&terms[i], &terms[j]) {
-                        if f == g && xs.len() == ys.len() && find(&mut p, i) != find(&mut p, j) && xs.iter().zip(ys).all(|(&x, &y)| find(&mut p, x) == find(&mut p, y)) {
-                            let (ri, rj) = (find(&mut p, i), find(&mut p, j));
-                            p[ri] = rj;
-                            changed = true;
-                        }
+                    if let (Some((f, xs)), Some((g, ys))) = (&terms[i], &terms[j])
+                        && f == g
+                        && xs.len() == ys.len()
+                        && find(&mut p, i) != find(&mut p, j)
+                        && xs.iter().zip(ys).all(|(&x, &y)| find(&mut p, x) == find(&mut p, y))
+                    {
+                        let (ri, rj) = (find(&mut p, i), find(&mut p, j));
+                        p[ri] = rj;
+                        changed = true;
                     }
                 }
             }

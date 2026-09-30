@@ -62,6 +62,7 @@ impl DlTheory {
         self.distances[var].clone() - self.distances[0].clone()
     }
 
+    #[allow(dead_code)]
     pub(super) fn lbs(&self) -> Vec<InfRational> {
         let dists_to_zero = self.exact_distances_from(0, true);
         dists_to_zero.into_iter().map(|d| -d).collect()
@@ -72,6 +73,7 @@ impl DlTheory {
         -dists[0].clone()
     }
 
+    #[allow(dead_code)]
     pub(super) fn ubs(&self) -> Vec<InfRational> {
         self.exact_distances_from(0, false)
     }
@@ -81,6 +83,7 @@ impl DlTheory {
         dists[var].clone()
     }
 
+    #[allow(dead_code)]
     pub(super) fn exact_distance(&self, from: usize, to: usize) -> InfRational {
         let dists = self.exact_distances_from(from, false);
         dists[to].clone()

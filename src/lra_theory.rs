@@ -457,6 +457,7 @@ impl LraTheory {
     }
 
     /// Optimizes the given objective function, returning the optimal value.
+    #[allow(dead_code)]
     pub(super) fn optimize(&mut self, objective: SparseRow, maximize: bool) -> InfRational {
         let mut obj_row = self.canonicalize(objective);
 
@@ -545,6 +546,7 @@ impl LraTheory {
     }
 
     /// Canonicalizes a row by eliminating basic variables.
+    #[allow(dead_code)]
     fn canonicalize(&self, mut row: SparseRow) -> SparseRow {
         loop {
             let Some(&(basic_var, _)) = row.iter().find(|(v, _)| self.is_basic(*v)) else {
@@ -647,6 +649,7 @@ impl SparseRow {
         }
     }
 
+    #[allow(dead_code)]
     fn add_scaled_untracked(&mut self, other: &SparseRow, scale: &rug::Rational) {
         let old_terms = std::mem::take(&mut self.terms);
         let mut new_terms = Vec::with_capacity(old_terms.len());

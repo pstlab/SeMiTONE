@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use tracing::info;
 
 fn run_z3_oracle(script: &str) -> String {
-    let mut child = Command::new("z3").args(&["-in", "-T:10"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("Failed to spawn Z3 process");
+    let mut child = Command::new("z3").args(["-in", "-T:10"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().expect("Failed to spawn Z3 process");
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(script.as_bytes()).expect("Failed to write to Z3 stdin");
     }
