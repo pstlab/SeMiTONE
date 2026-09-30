@@ -131,8 +131,11 @@ impl<'a> SmtParser<'a> {
                 }
 
                 let bool_expr = self.translate_bool_term(&term);
-                if !self.solver.smt.assert(&bool_expr) {
-                    self.is_unsat = true;
+                match self.solver.smt.assert(&bool_expr) {
+                    crate::AssertResult::Ok | crate::AssertResult::Backtracked { .. } => {}
+                    crate::AssertResult::Conflict { .. } => {
+                        self.is_unsat = true;
+                    }
                 }
             }
             concrete::Command::CheckSat => {
@@ -196,7 +199,7 @@ impl<'a> SmtParser<'a> {
                 // Reset trivial unsat flag upon popping
                 self.is_unsat = false;
             }
-            _ => {} // Ignore set-info, get-model, etc. for the moment
+            _ => {} // Ignore other commands for now
         }
     }
 

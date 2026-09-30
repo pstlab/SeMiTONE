@@ -7,21 +7,15 @@
 ![Build Status](https://github.com/pstlab/SeMiTONE/actions/workflows/rust.yml/badge.svg)
 [![codecov](https://codecov.io/gh/pstlab/SeMiTONE/branch/main/graph/badge.svg)](https://codecov.io/gh/pstlab/SeMiTONE)
 
-**SeMiTONE** (Satisfiability Modulo TheOries NEtwork) is a highly modular, Rust-native foundation for building custom Satisfiability Modulo Theories (SMT) and Optimization Modulo Theories (OMT) solvers.
-
-While most SMT projects provide monolithic, black-box solvers, SeMiTONE takes a different approach. It provides the **core mathematical engine and backtrackable data structures** required to evaluate formulas against background theories, deliberately delegating the "search" phase (e.g., DPLL/CDCL branching loops and resolution heuristics) to external modules. 
-
-This makes SeMiTONE the perfect building block for researchers and engineers who need deep integration of logic reasoning into their own architectures without being constrained by a rigid, pre-packaged solver.
+**SeMiTONE** (Satisfiability Modulo TheOries NEtwork) is a modular Rust library for building SMT solvers and integrating theory reasoning into custom search procedures. Its public API exposes typed expressions, theory propagation, decision levels, clauses, and backtracking. An optional built-in DPLL(T) search loop and an SMT-LIB interface are available through Cargo features.
 
 ## 🚀 Key Features
 
-* **Lazy Lemmatization Framework:** Seamlessly delegates theory evaluation to specialized underlying modules, enabling an efficient DPLL(T) architecture.
-* **Advanced Theory Support:** 
-  * **Linear Real Arithmetic (LRA):** Fast simplex-based evaluation with native support for infinitesimals, strict/non-strict bounds, Gomory fractional cuts, and Branch & Bound for integer variables.
-  * **Enumerative Domains (Enum):** Arc-consistency propagation for finite domains.
-* **CDCL-Ready:** Automatically performs conflict analysis, generates precise *no-goods* (theory lemmas), and computes optimal backjump levels (e.g., 1UIP) to aggressively prune the search space.
-* **Fully Incremental:** Features zero-cost context switching (`push`/`pop`) and solving under assumptions, ideal for iterative constraint refinement.
-* **Rust-Native Performance:** Zero-allocation pivoting, sparse matrix representations, and robust memory management.
+* **Theory reasoning:** Linear real and integer arithmetic, difference logic, finite-domain enums, and equality with uninterpreted functions.
+* **Incremental scopes:** `push` and `pop` save and restore SAT and theory state.
+* **Search integration:** Propagation reports conflict clauses and suggested backtrack levels; applications can provide their own search loop or enable the built-in `solver` feature.
+* **SMT-LIB support:** The optional `parser` feature provides the SMT-LIB interface and enables the built-in solver.
+* **Sparse arithmetic:** The LRA engine uses an incremental simplex tableau and exact rational arithmetic, including infinitesimals for strict bounds and branch-and-bound/Gomory cuts for integer variables.
 
 ## 🎯 Ideal Use Cases
 
@@ -32,59 +26,47 @@ SeMiTONE is designed for domains that require tightly coupled, custom logic reas
 
 ## 🛠️ Quick Look
 
-SeMiTONE exposes a clean, strongly-typed AST to build and assert constraints. A typical interaction is:
-
-1. `assert` formulas (returns `false` on trivial, immediate inconsistency),
-2. call `propagate` (returns `Ok(())` if feasible, or `Err((backtrack_level, no_good))` on conflict),
-3. choose a branch with `decide` (or `decide_enum`), then call `propagate` again.
-
-Below is a compact conceptual example:
+`assert` adds a constraint to the current context; it does not by itself check full theory feasibility. Call `propagate` to process queued SAT assignments and detect theory conflicts. Its result is `Ok(())` or `Err((backtrack_level, clause))`.
 
 ```rust
-use semitone::SeMiTONE;
+use semitone::{AssertResult, SeMiTONE};
 
 let mut solver = SeMiTONE::new();
 
-// Declare variables across different theories
 let x = solver.new_real();
 let y = solver.new_real();
 let state = solver.new_enum([1, 2, 3]);
 
-// Build constraints: (x + y = 10) AND (x > 6)
-let eq_expr = (&x + &y).eq(10);
-let gt_expr = x.gt(6);
+let constraints = (&x + &y).eq(10) & x.gt(6);
+match solver.assert(constraints) {
+    AssertResult::Ok => {}
+    AssertResult::Backtracked { undone } => {
+        println!("Assignments retracted while asserting: {undone:?}");
+    }
+    AssertResult::Conflict { bt_level, clause } => {
+        println!("Conflict at backtrack level {bt_level}: {clause:?}");
+        return;
+    }
+}
 
-// 1) Assert constraints into the network.
-//    `assert` returns false only for immediate/trivial inconsistencies.
-if !solver.assert(eq_expr & gt_expr) {
-  println!("Trivial inconsistency detected during assert.");
-} else {
-  // 2) Propagate current consequences.
-  match solver.propagate() {
+match solver.propagate() {
     Ok(()) => {
-      // 3) Make a decision and propagate again.
-      // `decide_enum` is a convenience wrapper around a SAT-level decision.
-      if solver.decide_enum(&state, 2) {
-        match solver.propagate() {
-          Ok(()) => println!("Branch is still feasible after the decision."),
-          Err((level, no_good)) => {
-            println!("Conflict after decide: backtrack to level {}", level);
-            println!("No-good: {:?}", no_good);
-          }
+        if solver.decide_enum(&state, 2) {
+            match solver.propagate() {
+                Ok(()) => println!("The current branch has no detected conflict."),
+                Err((level, clause)) => {
+                    println!("Conflict at backtrack level {level}: {clause:?}");
+                }
+            }
         }
-      } else {
-        println!("Decision was immediately inconsistent.");
-      }
     }
-    Err((level, no_good)) => {
-      println!("Conflict during propagation: backtrack to level {}", level);
-      println!("No-good: {:?}", no_good);
+    Err((level, clause)) => {
+        println!("Conflict at backtrack level {level}: {clause:?}");
     }
-  }
 }
 ```
 
-*Note: As SeMiTONE delegates search to external modules, you will need to wrap the network in your own decision loop to explore the boolean space and extract a final model.*
+For complete SAT/SMT search and model construction, use the optional `solver` feature or build a search loop around `decide`, `propagate`, `cancel_until`, and `check_ints`. A successful `propagate` only means no conflict was found by the propagation procedures; it is not by itself a complete SAT result.
 
 ## 📄 License
 

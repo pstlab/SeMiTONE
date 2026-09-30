@@ -1,4 +1,4 @@
-use crate::out_of_bounds;
+use crate::{AssertResult, out_of_bounds};
 use std::{collections::VecDeque, fmt, mem, ops};
 use tracing::trace;
 
@@ -123,8 +123,8 @@ impl SatSolver {
                         self.watches[falsified_index].push(*c_i);
                     }
                     self.prop_q.clear();
-                    if self.decision_level() == 0 {
-                        return Err((0, self.clauses[clause_idx].lits.clone()));
+                    if self.decision_level() <= self.floor_level() {
+                        return Err((self.floor_level(), self.clauses[clause_idx].lits.clone()));
                     }
                     return Err(self.analyze_conflict(clause_idx));
                 }
@@ -244,20 +244,20 @@ impl SatSolver {
         }
     }
 
-    pub(super) fn add_clause(&mut self, lits: impl IntoIterator<Item = Lit>) -> Result<(), Vec<Lit>> {
+    pub(super) fn add_clause(&mut self, lits: impl IntoIterator<Item = Lit>) -> AssertResult {
         let mut simplified_lits = Vec::new();
 
         for lit in lits {
             match self.lit_value(lit) {
                 Some(true) if self.level(lit.var()) == Some(0) => {
-                    return Ok(());
+                    return AssertResult::Ok; // Clause is already satisfied at level 0
                 }
                 Some(false) if self.level(lit.var()) == Some(0) => {
                     continue;
                 }
                 _ => {
                     if simplified_lits.contains(&!lit) {
-                        return Ok(());
+                        return AssertResult::Ok; // Clause is trivially satisfied (tautology)
                     }
                     if !simplified_lits.contains(&lit) {
                         simplified_lits.push(lit);
@@ -266,22 +266,41 @@ impl SatSolver {
             }
         }
 
+        let mut res = AssertResult::Ok;
         match simplified_lits.len() {
-            0 => return Err(simplified_lits),
+            0 => return AssertResult::Conflict { bt_level: 0, clause: simplified_lits },
             1 => {
-                if !self.enqueue(simplified_lits[0], None) {
-                    return Err(simplified_lits);
+                let floor = self.floor_level();
+                let lit = simplified_lits[0];
+                let lvl = self.level(lit.var()).unwrap_or(0);
+                match self.lit_value(lit) {
+                    Some(true) if lvl <= floor => return AssertResult::Ok,
+                    Some(false) if lvl <= floor => {
+                        return AssertResult::Conflict { bt_level: floor, clause: simplified_lits };
+                    }
+                    _ => {}
                 }
+                if self.decision_level() > floor {
+                    res = AssertResult::Backtracked { undone: self.cancel_until(floor) };
+                }
+                let enqueued = self.enqueue(lit, None);
+                debug_assert!(enqueued);
             }
             _ => {
-                let clause_index = self.clauses.len();
-
-                simplified_lits.sort_by_key(|&l| match self.lit_value(l) {
-                    Some(true) => 0,
-                    None => 1,
-                    Some(false) => 2,
+                simplified_lits.sort_by_key(|&l| {
+                    let lvl = self.level(l.var()).unwrap_or(0);
+                    match self.lit_value(l) {
+                        Some(true) => (0u8, lvl),
+                        None => (1, 0),
+                        Some(false) => (2, usize::MAX - lvl),
+                    }
                 });
 
+                if self.lit_value(simplified_lits[0]) == Some(false) {
+                    return AssertResult::Conflict { bt_level: self.conflict_bt_level(&simplified_lits), clause: simplified_lits };
+                }
+
+                let clause_index = self.clauses.len();
                 let clause = Clause { lits: simplified_lits.clone() };
                 trace!("Adding clause {}: {}", clause_index, clause);
 
@@ -290,12 +309,33 @@ impl SatSolver {
                 }
                 self.clauses.push(clause);
 
-                if self.lit_value(simplified_lits[0]) == Some(false) || (self.lit_value(simplified_lits[1]) == Some(false) && self.lit_value(simplified_lits[0]).is_none() && !self.enqueue(simplified_lits[0], Some(clause_index))) {
-                    return Err(simplified_lits);
+                if self.lit_value(simplified_lits[0]).is_none() && self.lit_value(simplified_lits[1]) == Some(false) {
+                    let assert_level = self.level(simplified_lits[1].var()).unwrap_or(0).max(self.floor_level());
+                    if self.decision_level() > assert_level {
+                        res = AssertResult::Backtracked { undone: self.cancel_until(assert_level) };
+                    }
+                    let enqueued = self.enqueue(simplified_lits[0], Some(clause_index));
+                    debug_assert!(enqueued);
                 }
             }
         }
-        Ok(())
+
+        res
+    }
+
+    /// Level to backtrack to so that the (falsified) `clause` becomes asserting; never below `floor`.
+    pub(super) fn conflict_bt_level(&self, clause: &[Lit]) -> usize {
+        let floor = self.floor_level();
+        if clause.len() <= 1 {
+            return floor;
+        }
+        let mut levels: Vec<usize> = clause.iter().map(|l| self.level(l.var()).unwrap_or(0)).collect();
+        levels.sort_unstable_by(|a, b| b.cmp(a));
+        let max = levels[0];
+        if max <= floor {
+            return floor;
+        }
+        if levels[1] < max { levels[1].max(floor) } else { (max - 1).max(floor) }
     }
 
     #[inline]
@@ -332,6 +372,7 @@ impl SatSolver {
                 retracted.push(lit);
             }
         }
+        self.prop_q.retain(|l| self.assigns[l.var()] == Some(!l.sign()));
         retracted
     }
 }
@@ -420,18 +461,19 @@ mod tests {
     }
 
     #[test]
-    fn test_decision_level_is_not_user_scope_and_unit_clause_stays_local() {
+    fn unit_clause_at_decision_level_is_asserted_at_root() {
         let mut sat = SatSolver::new();
         let var = sat.mk_var();
 
         sat.push_decision();
         assert_eq!(sat.floor_level(), 0);
-        assert!(sat.add_clause([Lit::new(var, false)]).is_ok());
-        assert_eq!(sat.decision_level(), 1);
-        assert_eq!(sat.lit_value(Lit::new(var, false)), Some(true));
+        let result = sat.add_clause([Lit::new(var, false)]);
+        assert_eq!(result, AssertResult::Backtracked { undone: vec![] });
+        assert_eq!(sat.decision_level(), 0);
+        assert_eq!(sat.level(var), Some(0));
 
         sat.cancel_until(0);
-        assert_eq!(sat.lit_value(Lit::new(var, false)), None);
+        assert_eq!(sat.lit_value(Lit::new(var, false)), Some(true));
     }
 
     #[test]
@@ -448,12 +490,18 @@ mod tests {
         let b9 = sat.mk_var();
 
         // [(b1 ∨ b2) ∧ (b1 ∨ b3 ∨ b7) ∧ (¬b2 ∨ ¬b3 ∨ b4) ∧ (¬b4 ∨ b5 ∨ b8) ∧ (¬b4 ∨ b6 ∨ b9) ∧ (¬b5 ∨ ¬b6)]
-        sat.add_clause([Lit::new(b1, false), Lit::new(b2, false)]).expect("Should be able to add clause");
-        sat.add_clause([Lit::new(b1, false), Lit::new(b3, false), Lit::new(b7, false)]).expect("Should be able to add clause");
-        sat.add_clause([Lit::new(b2, true), Lit::new(b3, true), Lit::new(b4, false)]).expect("Should be able to add clause");
-        sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]).expect("Should be able to add clause");
-        sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]).expect("Should be able to add clause");
-        sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]).expect("Should be able to add clause");
+        let result = sat.add_clause([Lit::new(b1, false), Lit::new(b2, false)]);
+        assert_eq!(result, AssertResult::Ok);
+        let result = sat.add_clause([Lit::new(b1, false), Lit::new(b3, false), Lit::new(b7, false)]);
+        assert_eq!(result, AssertResult::Ok);
+        let result = sat.add_clause([Lit::new(b2, true), Lit::new(b3, true), Lit::new(b4, false)]);
+        assert_eq!(result, AssertResult::Ok);
+        let result = sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]);
+        assert_eq!(result, AssertResult::Ok);
+        let result = sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]);
+        assert_eq!(result, AssertResult::Ok);
+        let result = sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]);
+        assert_eq!(result, AssertResult::Ok);
 
         // Decision: ¬b7
         decide(&mut sat, Lit::new(b7, true)).expect("Should be able to decide ¬b7");
@@ -470,6 +518,7 @@ mod tests {
         assert!(conflict_clause.contains(&Lit::new(b8, false)));
         assert!(conflict_clause.contains(&Lit::new(b9, false)));
         sat.cancel_until(bt_level);
-        sat.add_clause(conflict_clause).expect("Should be able to add learnt clause");
+        let result = sat.add_clause(conflict_clause);
+        assert_eq!(result, AssertResult::Ok);
     }
 }

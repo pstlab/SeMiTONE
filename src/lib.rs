@@ -1,10 +1,14 @@
 #![doc = include_str!("../README.md")]
 
 //! # API overview
-//! [`SeMiTONE`] owns all solver state. Create expressions with the types in
-//! [`ast`], assert a [`ast::BoolExpr`], then call [`SeMiTONE::propagate`] after
-//! each assertion or decision. Applications that need a complete SAT/SMT search
-//! loop can use the decision, trail, and clause APIs exposed by [`SeMiTONE`].
+//! [`SeMiTONE`] owns the SAT and theory state. Build constraints with the types
+//! in [`ast`], add them with [`SeMiTONE::assert`], then call
+//! [`SeMiTONE::propagate`] to process queued assignments and detect theory
+//! conflicts. `assert` can report a syntactic/SAT-level conflict immediately,
+//! but `AssertResult::Ok` only means the constraint was accepted; it does not
+//! establish that the current theory state is feasible. Applications can manage
+//! search themselves with [`SeMiTONE::decide`] and [`SeMiTONE::cancel_until`],
+//! or enable the optional `solver` feature for the built-in search loop.
 
 pub mod ast;
 mod dl_theory;
@@ -33,22 +37,35 @@ use rug::Assign;
 pub use sat_solver::Lit;
 use tracing::trace;
 
+/// Outcome of adding a clause or asserting a Boolean constraint.
+#[derive(PartialEq, Debug)]
 pub enum AssertResult {
+    /// The constraint was accepted without backtracking.
     Ok,
+    /// The constraint was accepted after returning to a shallower decision
+    /// level. `undone` lists the retracted literals in reverse chronological
+    /// order.
     Backtracked { undone: Vec<Lit> },
-    Conflict { bt_level: usize, clause: Vec<Lit>, undone: Vec<Lit> },
+    /// The constraint conflicts with the current assignment. `bt_level` is the
+    /// suggested backtrack level and `clause` is the conflict explanation.
+    Conflict { bt_level: usize, clause: Vec<Lit> },
 }
 
+/// Outcome of encoding a Boolean expression as a SAT literal.
 pub enum EncodeResult {
+    /// The literal is the encoding of the expression.
     Ok(Lit),
+    /// The literal was produced after encoding clauses caused a backtrack.
     Backtracked { lit: Lit, undone: Vec<Lit> },
-    Conflict { bt_level: usize, clause: Vec<Lit>, undone: Vec<Lit> },
+    /// Encoding produced an immediate conflict.
+    Conflict { bt_level: usize, clause: Vec<Lit> },
 }
 
-/// Main solver entry point for propositional, linear arithmetic, and enum constraints.
+/// Main solver entry point for propositional and theory constraints.
 ///
-/// The solver combines a SAT core with theory propagation for linear rational
-/// arithmetic and finite-domain enum reasoning.
+/// The solver combines a SAT core with propagation for linear real and integer
+/// arithmetic, difference logic, finite-domain enums, and equality with
+/// uninterpreted functions.
 pub struct SeMiTONE {
     registry: ProxyRegistry,
     sat_solver: SatSolver,
@@ -146,49 +163,111 @@ impl SeMiTONE {
         self.sat_solver.num_vars()
     }
 
-    /// Adds a clause directly to the SAT core.
+    /// Adds a clause to the SAT core.
     ///
-    /// Returns `Ok(())` when the clause is accepted, or `Err(conflict_clause)` if
-    /// the clause is immediately contradictory at the current root context.
-    ///
-    /// This is useful for integrating external search/learning loops that produce
-    /// learned no-goods.
-    pub fn add_clause(&mut self, clause: impl IntoIterator<Item = Lit>) -> Result<(), Vec<Lit>> {
-        self.sat_solver.add_clause(clause)
+    /// Returns [`AssertResult::Ok`] when accepted, [`AssertResult::Backtracked`]
+    /// when assignments had to be retracted to the current user-scope floor, or
+    /// [`AssertResult::Conflict`] when the clause is inconsistent there. Theory
+    /// state is synchronized with any backtrack.
+    pub fn add_clause(&mut self, clause: impl IntoIterator<Item = Lit>) -> AssertResult {
+        match self.sat_solver.add_clause(clause) {
+            AssertResult::Ok => AssertResult::Ok,
+            AssertResult::Backtracked { undone } => {
+                let level = self.sat_solver.decision_level();
+                self.lra_theory.cancel_until(level);
+                self.enum_theory.cancel_until(level);
+                self.dl_theory.cancel_until(level);
+                self.euf_theory.cancel_until(level);
+                self.notified_len = self.sat_solver.trail.len();
+                AssertResult::Backtracked { undone }
+            }
+            AssertResult::Conflict { bt_level, clause } => AssertResult::Conflict { bt_level, clause },
+        }
+    }
+
+    /// Adds multiple clauses, accumulating any literals retracted while they
+    /// are inserted. Stops at the first conflict.
+    pub fn add_clauses(&mut self, clauses: impl IntoIterator<Item = Vec<Lit>>) -> AssertResult {
+        let mut final_undone = Vec::new();
+
+        for clause in clauses {
+            match self.add_clause(clause) {
+                AssertResult::Ok => {}
+                AssertResult::Backtracked { mut undone } => {
+                    final_undone.append(&mut undone);
+                }
+                AssertResult::Conflict { bt_level, clause } => {
+                    return AssertResult::Conflict { bt_level, clause };
+                }
+            }
+        }
+
+        if final_undone.is_empty() { AssertResult::Ok } else { AssertResult::Backtracked { undone: final_undone } }
     }
 
     /// Adds a Boolean constraint to the current solver context.
     ///
-    /// Returns `true` if the assertion was successfully added, or `false` if it
-    /// led to an immediate, trivial conflict while translating/asserting.
-    ///
-    /// Note that `true` does not imply global feasibility: call [`SeMiTONE::propagate`]
-    /// to detect conflicts that emerge after propagation through SAT/theory state.
-    pub fn assert(&mut self, expr: impl AsRef<BoolExpr>) -> bool {
+    /// Returns [`AssertResult::Ok`] if accepted, [`AssertResult::Backtracked`]
+    /// if adding it retracted assignments to the current user-scope floor, or
+    /// [`AssertResult::Conflict`] if it immediately conflicts with the current
+    /// assignment. Acceptance does not imply theory feasibility; call
+    /// [`SeMiTONE::propagate`] to process queued literals and detect theory
+    /// conflicts.
+    pub fn assert(&mut self, expr: impl AsRef<BoolExpr>) -> AssertResult {
         self.assert_internal(expr.as_ref(), true)
     }
 
-    fn assert_internal(&mut self, expr: &BoolExpr, polarity: bool) -> bool {
+    fn assert_internal(&mut self, expr: &BoolExpr, polarity: bool) -> AssertResult {
         match (expr, polarity) {
             (BoolExpr::Not(inner), _) => self.assert_internal(inner, !polarity),
             (BoolExpr::And(args), true) | (BoolExpr::Or(args), false) => {
+                let mut accumulated_undone = Vec::new();
                 for arg in args {
-                    if !self.assert_internal(arg, polarity) {
-                        return false;
+                    match self.assert_internal(arg, polarity) {
+                        AssertResult::Ok => {}
+                        AssertResult::Backtracked { mut undone } => {
+                            accumulated_undone.append(&mut undone);
+                        }
+                        AssertResult::Conflict { bt_level, clause } => {
+                            return AssertResult::Conflict { bt_level, clause };
+                        }
                     }
                 }
-                true
+                if accumulated_undone.is_empty() { AssertResult::Ok } else { AssertResult::Backtracked { undone: accumulated_undone } }
             }
             (BoolExpr::Or(args), true) | (BoolExpr::And(args), false) => {
                 let mut clause = Vec::with_capacity(args.len());
+                let mut accumulated_undone = Vec::new();
+
                 for arg in args {
-                    let mut lit = self.encode_bool(arg);
-                    if !polarity {
-                        lit = !lit;
+                    match self.encode_bool(arg) {
+                        EncodeResult::Ok(lit) => {
+                            clause.push(if polarity { lit } else { !lit });
+                        }
+                        EncodeResult::Backtracked { lit, mut undone } => {
+                            clause.push(if polarity { lit } else { !lit });
+                            accumulated_undone.append(&mut undone);
+                        }
+                        EncodeResult::Conflict { bt_level, clause: conflict_clause } => {
+                            return AssertResult::Conflict { bt_level, clause: conflict_clause };
+                        }
                     }
-                    clause.push(lit);
                 }
-                self.sat_solver.add_clause(clause).is_ok()
+
+                match self.add_clause(clause) {
+                    AssertResult::Ok => {
+                        if accumulated_undone.is_empty() {
+                            AssertResult::Ok
+                        } else {
+                            AssertResult::Backtracked { undone: accumulated_undone }
+                        }
+                    }
+                    AssertResult::Backtracked { mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        AssertResult::Backtracked { undone: accumulated_undone }
+                    }
+                    AssertResult::Conflict { bt_level, clause } => AssertResult::Conflict { bt_level, clause },
+                }
             }
             (BoolExpr::Lt(e1, e2), _) | (BoolExpr::Le(e1, e2), _) | (BoolExpr::Ge(e1, e2), _) | (BoolExpr::Gt(e1, e2), _) => {
                 let (vars, const_term) = self.diff(e1, e2);
@@ -200,7 +279,12 @@ impl SeMiTONE {
                         BoolExpr::Gt(_, _) => const_term.is_positive(),
                         _ => unreachable!(),
                     };
-                    return if polarity { is_sat } else { !is_sat };
+                    let holds = if polarity { is_sat } else { !is_sat };
+                    if holds {
+                        return AssertResult::Ok;
+                    } else {
+                        return AssertResult::Conflict { bt_level: 0, clause: vec![] };
+                    }
                 }
 
                 let (is_upper_bound, is_strict) = match (expr, polarity) {
@@ -215,7 +299,7 @@ impl SeMiTONE {
                     _ => unreachable!(),
                 };
 
-                if vars.len() == 1 {
+                let lit = if vars.len() == 1 {
                     let (var, coeff) = vars.iter().next().unwrap();
                     let is_int = self.lra_theory.is_int_var(*var);
                     let is_upper_for_var = is_upper_bound == coeff.is_positive();
@@ -229,7 +313,8 @@ impl SeMiTONE {
                         InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
                     };
 
-                    if is_upper_for_var { self.lra_theory.set_ub(None, *var, bound).is_ok() } else { self.lra_theory.set_lb(None, *var, bound).is_ok() }
+                    let constraint = if is_upper_for_var { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
+                    self.get_or_create_proxy(constraint)
                 } else {
                     let slack = self.lra_theory.get_or_create_slack(vars);
                     let is_int = self.lra_theory.is_int_var(slack);
@@ -242,145 +327,224 @@ impl SeMiTONE {
                         InfRational::new(Rational::Finite(-const_term), eps_shift)
                     };
 
-                    if is_upper_bound { self.lra_theory.set_ub(None, slack, bound).is_ok() } else { self.lra_theory.set_lb(None, slack, bound).is_ok() }
-                }
-            }
-            (BoolExpr::Eq(e1, e2), _) => {
-                if let (Expr::Arith(a1), Expr::Arith(a2)) = (&**e1, &**e2) {
-                    let (vars, const_term) = self.diff(a1, a2);
+                    let constraint = if is_upper_bound { TheoryConstraint::LraUb(slack, bound) } else { TheoryConstraint::LraLb(slack, bound) };
+                    self.get_or_create_proxy(constraint)
+                };
 
-                    if vars.is_empty() {
-                        let is_sat = const_term.is_zero();
-                        return if polarity { is_sat } else { !is_sat };
-                    }
-
-                    if polarity {
-                        let bound = InfRational::new(Rational::Finite(-const_term), rug::Rational::from(0));
-
-                        if vars.len() == 1 {
-                            let (var, coeff) = vars.iter().next().unwrap();
-                            let final_bound = bound / coeff.clone();
-                            self.lra_theory.set_lb(None, *var, final_bound.clone()).is_ok() && self.lra_theory.set_ub(None, *var, final_bound).is_ok()
-                        } else {
-                            let slack = self.lra_theory.get_or_create_slack(vars);
-                            self.lra_theory.set_lb(None, slack, bound.clone()).is_ok() && self.lra_theory.set_ub(None, slack, bound).is_ok()
-                        }
-                    } else {
-                        let lt_lit = self.mk_le(a1, a2, true);
-                        let gt_lit = self.mk_ge(a1, a2, true);
-                        self.sat_solver.add_clause([lt_lit, gt_lit]).is_ok()
-                    }
-                } else {
-                    let mut lit = self.encode_eq(e1, e2);
-                    if !polarity {
-                        lit = !lit;
-                    }
-                    self.sat_solver.add_clause([lit]).is_ok()
-                }
+                self.add_clause([lit])
             }
             _ => {
-                let mut lit = self.encode_bool(expr);
-                if !polarity {
-                    lit = !lit;
+                let mut accumulated_undone = Vec::new();
+                let lit = match self.encode_bool(expr) {
+                    EncodeResult::Ok(l) => l,
+                    EncodeResult::Backtracked { lit: l, mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        l
+                    }
+                    EncodeResult::Conflict { bt_level, clause } => {
+                        return AssertResult::Conflict { bt_level, clause };
+                    }
+                };
+
+                let target_lit = if polarity { lit } else { !lit };
+
+                match self.add_clause([target_lit]) {
+                    AssertResult::Ok => {
+                        if accumulated_undone.is_empty() {
+                            AssertResult::Ok
+                        } else {
+                            AssertResult::Backtracked { undone: accumulated_undone }
+                        }
+                    }
+                    AssertResult::Backtracked { mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        AssertResult::Backtracked { undone: accumulated_undone }
+                    }
+                    AssertResult::Conflict { bt_level, clause } => AssertResult::Conflict { bt_level, clause },
                 }
-                self.sat_solver.add_clause([lit]).is_ok()
             }
         }
     }
 
     /// Encodes a Boolean expression and returns its equivalent SAT literal.
     ///
-    /// The returned literal may refer to an internal proxy variable. Encoding
-    /// a compound expression can therefore add auxiliary variables and
-    /// clauses to the solver. The literal preserves the expression's polarity
-    /// and can be inspected with [`SeMiTONE::get_lit_val`] or used with
-    /// [`SeMiTONE::decide`]. This method does not assert the expression.
-    pub fn track_expr(&mut self, expr: impl AsRef<BoolExpr>) -> Lit {
+    /// [`EncodeResult::Ok`] contains the literal, which may be an internal
+    /// proxy. Encoding compound expressions can add auxiliary variables and
+    /// clauses; [`EncodeResult::Backtracked`] also reports retracted literals,
+    /// and [`EncodeResult::Conflict`] reports an immediate conflict. This does
+    /// not assert the expression. The literal can be inspected with
+    /// [`SeMiTONE::get_lit_val`] or used with [`SeMiTONE::decide`].
+    pub fn track_expr(&mut self, expr: impl AsRef<BoolExpr>) -> EncodeResult {
         self.encode_bool(expr.as_ref())
     }
 
-    fn encode_bool(&mut self, expr: &BoolExpr) -> Lit {
+    fn encode_bool(&mut self, expr: &BoolExpr) -> EncodeResult {
         match expr {
-            BoolExpr::True => Lit::TRUE,
-            BoolExpr::False => Lit::FALSE,
-            BoolExpr::Var(v) => Lit::new(v.0, false),
+            BoolExpr::True => EncodeResult::Ok(Lit::TRUE),
+            BoolExpr::False => EncodeResult::Ok(Lit::FALSE),
+            BoolExpr::Var(v) => EncodeResult::Ok(Lit::new(v.0, false)),
+
             BoolExpr::Not(inner) => match inner.as_ref() {
-                BoolExpr::Lt(a1, a2) => self.mk_ge(a1, a2, false),
-                BoolExpr::Le(a1, a2) => self.mk_ge(a1, a2, true),
-                BoolExpr::Ge(a1, a2) => self.mk_le(a1, a2, true),
-                BoolExpr::Gt(a1, a2) => self.mk_le(a1, a2, false),
-                BoolExpr::DlLt(f, t, b) => self.mk_dl_ge(f.0, t.0, b.clone(), false), // !(x < y) => x >= y
-                BoolExpr::DlLe(f, t, b) => self.mk_dl_ge(f.0, t.0, b.clone(), true),  // !(x <= y) => x > y
-                BoolExpr::DlGe(f, t, b) => self.mk_dl_le(f.0, t.0, b.clone(), true),  // !(x >= y) => x < y
-                BoolExpr::DlGt(f, t, b) => self.mk_dl_le(f.0, t.0, b.clone(), false), // !(x > y) => x <= y
-                _ => !self.encode_bool(inner),
+                BoolExpr::Lt(a1, a2) => EncodeResult::Ok(self.mk_ge(a1, a2, false)),
+                BoolExpr::Le(a1, a2) => EncodeResult::Ok(self.mk_ge(a1, a2, true)),
+                BoolExpr::Ge(a1, a2) => EncodeResult::Ok(self.mk_le(a1, a2, true)),
+                BoolExpr::Gt(a1, a2) => EncodeResult::Ok(self.mk_le(a1, a2, false)),
+                BoolExpr::DlLt(f, t, b) => EncodeResult::Ok(self.mk_dl_ge(f.0, t.0, b.clone(), false)),
+                BoolExpr::DlLe(f, t, b) => EncodeResult::Ok(self.mk_dl_ge(f.0, t.0, b.clone(), true)),
+                BoolExpr::DlGe(f, t, b) => EncodeResult::Ok(self.mk_dl_le(f.0, t.0, b.clone(), true)),
+                BoolExpr::DlGt(f, t, b) => EncodeResult::Ok(self.mk_dl_le(f.0, t.0, b.clone(), false)),
+                _ => match self.encode_bool(inner) {
+                    EncodeResult::Ok(lit) => EncodeResult::Ok(!lit),
+                    EncodeResult::Backtracked { lit, undone } => EncodeResult::Backtracked { lit: !lit, undone },
+                    EncodeResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+                },
             },
+
             BoolExpr::And(terms) => {
                 let mut lits = Vec::with_capacity(terms.len());
+                let mut accumulated_undone = Vec::new();
+
                 for term in terms {
-                    lits.push(self.encode_bool(term));
+                    match self.encode_bool(term) {
+                        EncodeResult::Ok(lit) => lits.push(lit),
+                        EncodeResult::Backtracked { lit, mut undone } => {
+                            lits.push(lit);
+                            accumulated_undone.append(&mut undone);
+                        }
+                        EncodeResult::Conflict { bt_level, clause } => {
+                            return EncodeResult::Conflict { bt_level, clause };
+                        }
+                    }
                 }
 
                 let proxy_var = self.sat_solver.mk_var();
                 let proxy_lit = Lit::new(proxy_var, true);
+                let mut clauses = Vec::with_capacity(lits.len() + 1);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause([!proxy_lit, lit]).expect("Failed to add clause");
+                    clauses.push(vec![!proxy_lit, lit]);
                 }
 
                 let mut big_clause: Vec<Lit> = lits.into_iter().map(|l| !l).collect();
                 big_clause.push(proxy_lit);
-                self.sat_solver.add_clause(big_clause).expect("Failed to add clause");
+                clauses.push(big_clause);
 
-                proxy_lit
+                match self.add_clauses(clauses) {
+                    AssertResult::Ok => {
+                        if accumulated_undone.is_empty() {
+                            EncodeResult::Ok(proxy_lit)
+                        } else {
+                            EncodeResult::Backtracked { lit: proxy_lit, undone: accumulated_undone }
+                        }
+                    }
+                    AssertResult::Backtracked { mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        EncodeResult::Backtracked { lit: proxy_lit, undone: accumulated_undone }
+                    }
+                    AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+                }
             }
+
             BoolExpr::Or(terms) => {
                 let mut lits = Vec::with_capacity(terms.len());
+                let mut accumulated_undone = Vec::new();
+
                 for term in terms {
-                    lits.push(self.encode_bool(term));
+                    match self.encode_bool(term) {
+                        EncodeResult::Ok(lit) => lits.push(lit),
+                        EncodeResult::Backtracked { lit, mut undone } => {
+                            lits.push(lit);
+                            accumulated_undone.append(&mut undone);
+                        }
+                        EncodeResult::Conflict { bt_level, clause } => {
+                            return EncodeResult::Conflict { bt_level, clause };
+                        }
+                    }
                 }
 
                 let proxy_var = self.sat_solver.mk_var();
                 let proxy_lit = Lit::new(proxy_var, true);
+                let mut clauses = Vec::with_capacity(lits.len() + 1);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause([!lit, proxy_lit]).expect("Failed to add clause");
+                    clauses.push(vec![!lit, proxy_lit]);
                 }
 
                 let mut big_clause = lits;
                 big_clause.push(!proxy_lit);
-                self.sat_solver.add_clause(big_clause).expect("Failed to add clause");
+                clauses.push(big_clause);
 
-                proxy_lit
+                match self.add_clauses(clauses) {
+                    AssertResult::Ok => {
+                        if accumulated_undone.is_empty() {
+                            EncodeResult::Ok(proxy_lit)
+                        } else {
+                            EncodeResult::Backtracked { lit: proxy_lit, undone: accumulated_undone }
+                        }
+                    }
+                    AssertResult::Backtracked { mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        EncodeResult::Backtracked { lit: proxy_lit, undone: accumulated_undone }
+                    }
+                    AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+                }
             }
-            BoolExpr::Lt(e1, e2) => self.mk_le(e1, e2, true),
-            BoolExpr::Le(e1, e2) => self.mk_le(e1, e2, false),
-            BoolExpr::Ge(e1, e2) => self.mk_ge(e1, e2, false),
-            BoolExpr::Gt(e1, e2) => self.mk_ge(e1, e2, true),
+            BoolExpr::Lt(e1, e2) => EncodeResult::Ok(self.mk_le(e1, e2, true)),
+            BoolExpr::Le(e1, e2) => EncodeResult::Ok(self.mk_le(e1, e2, false)),
+            BoolExpr::Ge(e1, e2) => EncodeResult::Ok(self.mk_ge(e1, e2, false)),
+            BoolExpr::Gt(e1, e2) => EncodeResult::Ok(self.mk_ge(e1, e2, true)),
+
             BoolExpr::Eq(e1, e2) => self.encode_eq(e1, e2),
-            BoolExpr::DlLt(from, to, b) => self.mk_dl_le(from.0, to.0, b.clone(), true),
-            BoolExpr::DlLe(from, to, b) => self.mk_dl_le(from.0, to.0, b.clone(), false),
-            BoolExpr::DlGt(from, to, b) => self.mk_dl_ge(from.0, to.0, b.clone(), true),
-            BoolExpr::DlGe(from, to, b) => self.mk_dl_ge(from.0, to.0, b.clone(), false),
+
+            BoolExpr::DlLt(from, to, b) => EncodeResult::Ok(self.mk_dl_le(from.0, to.0, b.clone(), true)),
+            BoolExpr::DlLe(from, to, b) => EncodeResult::Ok(self.mk_dl_le(from.0, to.0, b.clone(), false)),
+            BoolExpr::DlGt(from, to, b) => EncodeResult::Ok(self.mk_dl_ge(from.0, to.0, b.clone(), true)),
+            BoolExpr::DlGe(from, to, b) => EncodeResult::Ok(self.mk_dl_ge(from.0, to.0, b.clone(), false)),
+
             BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(from.0, to.0, b.clone()),
         }
     }
 
-    fn encode_eq(&mut self, expr1: &Expr, expr2: &Expr) -> Lit {
+    fn encode_eq(&mut self, expr1: &Expr, expr2: &Expr) -> EncodeResult {
         match (expr1, expr2) {
             (Expr::Arith(a1), Expr::Arith(a2)) => self.mk_arith_eq(a1, a2),
             (Expr::Bool(b1), Expr::Bool(b2)) => {
-                let l1 = self.encode_bool(b1);
-                let l2 = self.encode_bool(b2);
-                let proxy_var = self.sat_solver.mk_var();
-                let p = Lit::new(proxy_var, true);
+                let mut accumulated_undone = Vec::new();
 
-                self.sat_solver.add_clause([!p, l1, !l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause([!p, !l1, l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause([p, l1, l2]).expect("Failed to add clause");
-                self.sat_solver.add_clause([p, !l1, !l2]).expect("Failed to add clause");
+                let l1 = match self.encode_bool(b1) {
+                    EncodeResult::Ok(lit) => lit,
+                    EncodeResult::Backtracked { lit, mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        lit
+                    }
+                    EncodeResult::Conflict { bt_level, clause } => return EncodeResult::Conflict { bt_level, clause },
+                };
 
-                p
+                let l2 = match self.encode_bool(b2) {
+                    EncodeResult::Ok(lit) => lit,
+                    EncodeResult::Backtracked { lit, mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        lit
+                    }
+                    EncodeResult::Conflict { bt_level, clause } => return EncodeResult::Conflict { bt_level, clause },
+                };
+
+                let p = self.new_lit();
+
+                match self.add_clauses([vec![!p, l1, !l2], vec![!p, !l1, l2], vec![p, l1, l2], vec![p, !l1, !l2]]) {
+                    AssertResult::Ok => {
+                        if accumulated_undone.is_empty() {
+                            EncodeResult::Ok(p)
+                        } else {
+                            EncodeResult::Backtracked { lit: p, undone: accumulated_undone }
+                        }
+                    }
+                    AssertResult::Backtracked { mut undone } => {
+                        accumulated_undone.append(&mut undone);
+                        EncodeResult::Backtracked { lit: p, undone: accumulated_undone }
+                    }
+                    AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+                }
             }
             (Expr::Enum(e1), Expr::Enum(e2)) => self.mk_enum_eq(e1, e2),
             (Expr::Euf(u1), Expr::Euf(u2)) => {
@@ -394,30 +558,30 @@ impl SeMiTONE {
                 };
 
                 if id1 == id2 {
-                    return Lit::TRUE;
+                    return EncodeResult::Ok(Lit::TRUE);
                 }
 
                 let (min_id, max_id) = if id1 < id2 { (id1, id2) } else { (id2, id1) };
 
-                self.get_or_create_proxy(TheoryConstraint::EufEq(min_id, max_id))
+                EncodeResult::Ok(self.get_or_create_proxy(TheoryConstraint::EufEq(min_id, max_id)))
             }
             _ => panic!("Type mismatch in Eq: cannot compare different domains.\nLeft: {:?}\nRight: {:?}", expr1, expr2),
         }
     }
 
-    fn mk_enum_eq(&mut self, e1: &EnumExpr, e2: &EnumExpr) -> Lit {
+    fn mk_enum_eq(&mut self, e1: &EnumExpr, e2: &EnumExpr) -> EncodeResult {
         match (e1, e2) {
             (EnumExpr::Const(c1), EnumExpr::Const(c2)) => {
                 if c1 == c2 {
-                    Lit::TRUE
+                    EncodeResult::Ok(Lit::TRUE)
                 } else {
-                    Lit::FALSE
+                    EncodeResult::Ok(Lit::FALSE)
                 }
             }
-            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => self.get_or_create_proxy(TheoryConstraint::EnumEq(v.0, *c)),
+            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => EncodeResult::Ok(self.get_or_create_proxy(TheoryConstraint::EnumEq(v.0, *c))),
             (EnumExpr::Var(v1), EnumExpr::Var(v2)) => {
                 if v1 == v2 {
-                    return Lit::TRUE;
+                    return EncodeResult::Ok(Lit::TRUE);
                 }
 
                 let domain1 = self.enum_theory.initial_domains[v1.0].clone();
@@ -425,9 +589,10 @@ impl SeMiTONE {
                 let common: Vec<i32> = domain1.intersection(&domain2).copied().collect();
 
                 if common.is_empty() {
-                    return Lit::FALSE;
+                    return EncodeResult::Ok(Lit::FALSE);
                 }
 
+                let mut clauses = Vec::new();
                 let mut lits = Vec::with_capacity(common.len());
                 for val in common {
                     let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v1.0, val));
@@ -436,9 +601,9 @@ impl SeMiTONE {
                     let and_proxy_var = self.sat_solver.mk_var();
                     let and_proxy = Lit::new(and_proxy_var, false);
 
-                    self.sat_solver.add_clause([!and_proxy, p1]).unwrap();
-                    self.sat_solver.add_clause([!and_proxy, p2]).unwrap();
-                    self.sat_solver.add_clause([!p1, !p2, and_proxy]).unwrap();
+                    clauses.push(vec![!and_proxy, p1]);
+                    clauses.push(vec![!and_proxy, p2]);
+                    clauses.push(vec![!p1, !p2, and_proxy]);
 
                     lits.push(and_proxy);
                 }
@@ -447,14 +612,18 @@ impl SeMiTONE {
                 let or_proxy = Lit::new(or_proxy_var, false);
 
                 for &lit in &lits {
-                    self.sat_solver.add_clause([!lit, or_proxy]).unwrap();
+                    clauses.push(vec![!lit, or_proxy]);
                 }
 
                 let mut big_clause = lits;
                 big_clause.push(!or_proxy);
-                self.sat_solver.add_clause(big_clause).unwrap();
+                clauses.push(big_clause);
 
-                or_proxy
+                match self.add_clauses(clauses) {
+                    AssertResult::Ok => EncodeResult::Ok(or_proxy),
+                    AssertResult::Backtracked { undone } => EncodeResult::Backtracked { lit: or_proxy, undone },
+                    AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+                }
             }
         }
     }
@@ -532,31 +701,29 @@ impl SeMiTONE {
         }
     }
 
-    fn mk_arith_eq(&mut self, e1: &ArithExpr, e2: &ArithExpr) -> Lit {
+    fn mk_arith_eq(&mut self, e1: &ArithExpr, e2: &ArithExpr) -> EncodeResult {
         if e1 == e2 {
-            return Lit::TRUE;
+            return EncodeResult::Ok(Lit::TRUE);
         }
 
         let le_lit = self.mk_le(e1, e2, false);
         let ge_lit = self.mk_ge(e1, e2, false);
         if le_lit == Lit::TRUE && ge_lit == Lit::TRUE {
-            return Lit::TRUE;
+            return EncodeResult::Ok(Lit::TRUE);
         }
         if le_lit == Lit::FALSE || ge_lit == Lit::FALSE {
-            return Lit::FALSE;
+            return EncodeResult::Ok(Lit::FALSE);
         }
 
-        let proxy_var = self.sat_solver.mk_var();
-        let p = Lit::new(proxy_var, false);
-
+        let p = self.new_lit();
         // p -> (x <= y)
-        self.sat_solver.add_clause([!p, le_lit]).expect("Failed to add clause");
         // p -> (x >= y)
-        self.sat_solver.add_clause([!p, ge_lit]).expect("Failed to add clause");
         // (x <= y) ∧ (x >= y) -> p
-        self.sat_solver.add_clause([!le_lit, !ge_lit, p]).expect("Failed to add clause");
-
-        p
+        match self.add_clauses([vec![!p, le_lit], vec![!p, ge_lit], vec![!le_lit, !ge_lit, p]]) {
+            AssertResult::Ok => EncodeResult::Ok(p),
+            AssertResult::Backtracked { undone } => EncodeResult::Backtracked { lit: p, undone },
+            AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+        }
     }
 
     fn mk_ge(&mut self, e1: &ArithExpr, e2: &ArithExpr, strict: bool) -> Lit {
@@ -645,18 +812,17 @@ impl SeMiTONE {
         self.mk_dl_le(to, from, -bound, strict)
     }
 
-    fn mk_dl_eq(&mut self, from: usize, to: usize, bound: rug::Rational) -> Lit {
+    fn mk_dl_eq(&mut self, from: usize, to: usize, bound: rug::Rational) -> EncodeResult {
         let le_lit = self.mk_dl_le(from, to, bound.clone(), false);
         let ge_lit = self.mk_dl_ge(from, to, bound, false);
 
-        let proxy_var = self.sat_solver.mk_var();
-        let p = Lit::new(proxy_var, false);
+        let p = self.new_lit();
 
-        self.sat_solver.add_clause([!p, le_lit]).expect("Failed to add clause");
-        self.sat_solver.add_clause([!p, ge_lit]).expect("Failed to add clause");
-        self.sat_solver.add_clause([!le_lit, !ge_lit, p]).expect("Failed to add clause");
-
-        p
+        match self.add_clauses([vec![!p, le_lit], vec![!p, ge_lit], vec![!le_lit, !ge_lit, p]]) {
+            AssertResult::Ok => EncodeResult::Ok(p),
+            AssertResult::Backtracked { undone } => EncodeResult::Backtracked { lit: p, undone },
+            AssertResult::Conflict { bt_level, clause } => EncodeResult::Conflict { bt_level, clause },
+        }
     }
 
     fn diff(&self, e1: &ArithExpr, e2: &ArithExpr) -> (SparseRow, rug::Rational) {
@@ -1321,7 +1487,8 @@ mod tests {
         let expr = (x.clone().gt(10)) & (x.lt(5));
 
         let result = solver.assert(expr);
-        assert!(!result, "The solver should detect that the system is unsatisfiable");
+        assert!(matches!(result, AssertResult::Ok));
+        assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
@@ -1333,7 +1500,8 @@ mod tests {
         let expr = (x.clone().eq(5)) & (x.gt(6));
 
         let result = solver.assert(expr);
-        assert!(!result, "The solver should detect that the system is unsatisfiable");
+        assert!(matches!(result, AssertResult::Ok));
+        assert!(solver.propagate().is_err(), "The solver should detect that the system is unsatisfiable");
     }
 
     #[test]
@@ -1359,18 +1527,18 @@ mod tests {
     fn test_constant_arithmetic_evaluations() {
         let mut solver = SeMiTONE::new();
 
-        assert!(solver.assert(ArithExpr::from(5).lt(10)));
-        assert!(solver.assert(ArithExpr::from(5).le(5)));
-        assert!(solver.assert(ArithExpr::from(10).ge(5)));
-        assert!(solver.assert(ArithExpr::from(10).gt(5)));
+        assert!(matches!(solver.assert(ArithExpr::from(5).lt(10)), AssertResult::Ok));
+        assert!(matches!(solver.assert(ArithExpr::from(5).le(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(ArithExpr::from(10).ge(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(ArithExpr::from(10).gt(5)), AssertResult::Ok));
 
-        assert!(!solver.assert(ArithExpr::from(10).lt(5)));
-        assert!(!solver.assert(ArithExpr::from(10).le(5)));
-        assert!(!solver.assert(ArithExpr::from(5).ge(10)));
-        assert!(!solver.assert(ArithExpr::from(5).gt(10)));
+        assert!(matches!(solver.assert(ArithExpr::from(10).lt(5)), AssertResult::Conflict { .. }));
+        assert!(matches!(solver.assert(ArithExpr::from(10).le(5)), AssertResult::Conflict { .. }));
+        assert!(matches!(solver.assert(ArithExpr::from(5).ge(10)), AssertResult::Conflict { .. }));
+        assert!(matches!(solver.assert(ArithExpr::from(5).gt(10)), AssertResult::Conflict { .. }));
 
-        assert!(solver.assert(!ArithExpr::from(10).lt(5)));
-        assert!(!solver.assert(!ArithExpr::from(5).lt(10)));
+        assert!(matches!(solver.assert(!ArithExpr::from(10).lt(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(!ArithExpr::from(5).lt(10)), AssertResult::Conflict { .. }));
     }
 
     #[test]
@@ -1379,23 +1547,27 @@ mod tests {
         let x = solver.new_real();
 
         solver.push();
-        assert!(solver.assert(!x.clone().lt(5)));
-        assert!(!solver.assert(x.clone().lt(4)));
+        assert!(matches!(solver.assert(!x.clone().lt(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(x.clone().lt(4)), AssertResult::Ok));
+        assert!(solver.propagate().is_err());
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(!x.clone().le(5)));
-        assert!(!solver.assert(x.clone().le(5)));
+        assert!(matches!(solver.assert(!x.clone().le(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(x.clone().le(5)), AssertResult::Ok));
+        assert!(solver.propagate().is_err());
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(!x.clone().ge(5)));
-        assert!(!solver.assert(x.clone().ge(5)));
+        assert!(matches!(solver.assert(!x.clone().ge(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(x.clone().ge(5)), AssertResult::Ok));
+        assert!(solver.propagate().is_err());
         solver.pop();
 
         solver.push();
-        assert!(solver.assert(!x.clone().gt(5)));
-        assert!(!solver.assert(x.clone().gt(5)));
+        assert!(matches!(solver.assert(!x.clone().gt(5)), AssertResult::Ok));
+        assert!(matches!(solver.assert(x.clone().gt(5)), AssertResult::Ok));
+        assert!(solver.propagate().is_err());
         solver.pop();
     }
 
