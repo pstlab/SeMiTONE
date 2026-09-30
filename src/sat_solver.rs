@@ -3,16 +3,17 @@ use std::{collections::VecDeque, fmt, mem, ops};
 use tracing::trace;
 
 pub(super) struct SatSolver {
-    pub(super) assigns: Vec<Option<bool>>, // Current assignments of boolean variables (None = unassigned, Some(true/false) = assigned)
-    pub(super) clauses: Vec<Clause>,       // List of clauses in the solver
-    pub(super) watches: Vec<Vec<usize>>,   // Watch lists for each literal (positive and negative)
-    reason: Vec<Option<usize>>,            // Reason for each variable's assignment
-    seen: Vec<bool>,                       // Temporary storage for conflict analysis
-    analyze_toclear: Vec<usize>,           // Temporary storage for conflict analysis
-    prop_q: VecDeque<Lit>,                 // Queue of literals to propagate
-    pub(super) trail: Vec<Lit>,            // Trail of assigned literals for backtracking
-    pub(super) trail_lim: Vec<usize>,      // Indices in the trail where decisions were made
-    level: Vec<Option<usize>>,             // Decision level for each variable
+    assigns: Vec<Option<bool>>,       // Current assignments of boolean variables (None = unassigned, Some(true/false) = assigned)
+    clauses: Vec<Clause>,             // List of clauses in the solver
+    watches: Vec<Vec<usize>>,         // Watch lists for each literal (positive and negative)
+    reason: Vec<Option<usize>>,       // Reason for each variable's assignment
+    seen: Vec<bool>,                  // Temporary storage for conflict analysis
+    analyze_toclear: Vec<usize>,      // Temporary storage for conflict analysis
+    prop_q: VecDeque<Lit>,            // Queue of literals to propagate
+    pub(super) trail: Vec<Lit>,       // Trail of assigned literals for backtracking
+    pub(super) trail_lim: Vec<usize>, // Indices in the trail where decisions were made
+    level: Vec<Option<usize>>,        // Decision level for each variable
+    user_scopes: Vec<(usize, usize)>, // Stack of user-defined scopes (start index in trail, decision level)
 }
 
 impl SatSolver {
@@ -28,6 +29,7 @@ impl SatSolver {
             trail: Vec::new(),
             trail_lim: Vec::new(),
             level: Vec::new(),
+            user_scopes: Vec::new(),
         };
         sat.mk_var();
         sat.enqueue(Lit::TRUE, None);
@@ -51,10 +53,28 @@ impl SatSolver {
         self.assigns.len()
     }
 
-    pub(super) fn push(&mut self) {
+    pub(super) fn push_decision(&mut self) {
         assert!(self.prop_q.is_empty(), "Cannot push decision level while propagation queue is not empty");
         self.trail_lim.push(self.trail.len());
-        trace!("Pushed decision level {}", self.decision_level());
+    }
+
+    pub(super) fn push(&mut self) {
+        self.push_decision();
+        self.user_scopes.push((self.decision_level(), self.clauses.len()));
+    }
+
+    pub(super) fn floor_level(&self) -> usize {
+        self.user_scopes.last().map_or(0, |&(level, _)| level)
+    }
+
+    pub(super) fn pop(&mut self) -> Option<Vec<Lit>> {
+        let (scope_level, clauses_len) = self.user_scopes.pop()?;
+        let undone = self.cancel_until(scope_level - 1);
+        for watch_list in self.watches.iter_mut() {
+            watch_list.retain(|&idx| idx < clauses_len);
+        }
+        self.clauses.truncate(clauses_len);
+        Some(undone)
     }
 
     pub(super) fn enqueue_decision(&mut self, lit: Lit) -> bool {
@@ -249,9 +269,6 @@ impl SatSolver {
         match simplified_lits.len() {
             0 => return Err(simplified_lits),
             1 => {
-                if self.decision_level() > 0 {
-                    self.cancel_until(0);
-                }
                 if !self.enqueue(simplified_lits[0], None) {
                     return Err(simplified_lits);
                 }
@@ -397,9 +414,24 @@ mod tests {
     use super::*;
 
     fn decide(sat: &mut SatSolver, lit: Lit) -> Result<(), (usize, Vec<Lit>)> {
-        sat.push();
+        sat.push_decision();
         sat.enqueue_decision(lit);
         sat.propagate()
+    }
+
+    #[test]
+    fn test_decision_level_is_not_user_scope_and_unit_clause_stays_local() {
+        let mut sat = SatSolver::new();
+        let var = sat.mk_var();
+
+        sat.push_decision();
+        assert_eq!(sat.floor_level(), 0);
+        assert!(sat.add_clause([Lit::new(var, false)]).is_ok());
+        assert_eq!(sat.decision_level(), 1);
+        assert_eq!(sat.lit_value(Lit::new(var, false)), Some(true));
+
+        sat.cancel_until(0);
+        assert_eq!(sat.lit_value(Lit::new(var, false)), None);
     }
 
     #[test]

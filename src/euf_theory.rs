@@ -22,6 +22,7 @@ enum EufUndoOp {
     ProofRerooted { changes: Vec<(usize, Option<ProofEdge>)> },
     SigInserted { sig: Signature },
     SigRemoved { sig: Signature, term: usize },
+    UseListPushed { root: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -43,6 +44,7 @@ pub(super) struct EufTheory {
     disequalities: Vec<(usize, usize, Lit)>,
     diseq_lim: Vec<usize>,
     next_func_id: usize,
+    late_apps: Vec<(usize, usize)>,
 }
 
 impl EufTheory {
@@ -60,6 +62,7 @@ impl EufTheory {
             disequalities: Vec::new(),
             diseq_lim: Vec::new(),
             next_func_id: 0,
+            late_apps: Vec::new(),
         }
     }
 
@@ -79,7 +82,6 @@ impl EufTheory {
     }
 
     fn add_term_internal(&mut self, term: Term) -> usize {
-        debug_assert!(self.trail_lim.is_empty(), "terms must be created at decision level 0");
         let id = self.terms.len();
 
         self.parents.push(id);
@@ -87,24 +89,45 @@ impl EufTheory {
         self.use_list.push(Vec::new());
         self.proof_tree.push(None);
 
-        if let Term::App(_, ref args) = term {
-            let mut roots: Vec<usize> = args.iter().map(|&a| self.find(a)).collect();
-            roots.sort_unstable();
-            roots.dedup();
-            for r in roots {
-                self.use_list[r].push(id);
-            }
-        }
-
+        let is_app = matches!(term, Term::App(..));
         self.terms.push(term);
-        if let Some(sig) = self.signature(id) {
-            if let Some(&existing_term) = self.sig_table.get(&sig) {
-                self.pending_merges.push((id, existing_term));
-            } else {
-                self.sig_table.insert(sig, id);
+
+        if is_app {
+            self.register_app(id);
+            if !self.trail_lim.is_empty() {
+                self.late_apps.push((id, self.trail_lim.len()));
             }
         }
         id
+    }
+
+    /// Registers an app in the use lists / signature table of the *current* congruence state.
+    /// Below level 0 the changes are trailed, so `cancel_until` removes them again.
+    fn register_app(&mut self, id: usize) {
+        let track = !self.trail_lim.is_empty();
+        let Term::App(_, args) = &self.terms[id] else { return };
+
+        let mut roots: Vec<usize> = args.iter().map(|&a| self.find(a)).collect();
+        roots.sort_unstable();
+        roots.dedup();
+        for r in roots {
+            self.use_list[r].push(id);
+            if track {
+                self.undo_trail.push(EufUndoOp::UseListPushed { root: r });
+            }
+        }
+
+        if let Some(sig) = self.signature(id) {
+            match self.sig_table.get(&sig) {
+                Some(&existing) => self.pending_merges.push((id, existing)),
+                None => {
+                    self.sig_table.insert(sig.clone(), id);
+                    if track {
+                        self.undo_trail.push(EufUndoOp::SigInserted { sig });
+                    }
+                }
+            }
+        }
     }
 
     pub(super) fn find(&self, mut term: usize) -> usize {
@@ -253,6 +276,9 @@ impl EufTheory {
                 EufUndoOp::SigRemoved { sig, term } => {
                     self.sig_table.insert(sig, term);
                 }
+                EufUndoOp::UseListPushed { root } => {
+                    self.use_list[root].pop();
+                }
             }
         }
 
@@ -262,6 +288,23 @@ impl EufTheory {
         let target_diseq = self.diseq_lim[level];
         self.disequalities.truncate(target_diseq);
         self.diseq_lim.truncate(level);
+
+        // Apps created above `level` survive, but their registration was just undone:
+        // redo it against the classes of the surviving state (in creation order).
+        let mut redo = Vec::new();
+        self.late_apps.retain_mut(|(id, lvl)| {
+            if *lvl > level {
+                redo.push(*id);
+                *lvl = level;
+                level > 0
+            } else {
+                true
+            }
+        });
+        for id in redo {
+            self.register_app(id);
+        }
+        self.propagate_congruences();
     }
 
     pub(super) fn explain(&self, t1: usize, t2: usize, explanation: &mut Vec<Lit>) {
@@ -466,6 +509,95 @@ mod regression_tests {
                         let l = rng.below(levels.len() - 1);
                         e.cancel_until(l);
                         levels.truncate(l + 1);
+                    }
+                    _ => continue,
+                }
+                let eqs: Vec<_> = levels.iter().flatten().copied().collect();
+                let oracle = naive_classes(&terms, &eqs);
+                for i in 0..terms.len() {
+                    for j in 0..terms.len() {
+                        assert_eq!(e.find(i) == e.find(j), oracle[i] == oracle[j], "seed {seed} step {step}: pair ({i},{j})");
+                    }
+                }
+            }
+        }
+    }
+    /// Apps created inside a level must end up registered on the *current* roots, and be
+    /// re-registered on the level's roots after backtracking.
+    #[test]
+    fn app_created_at_depth_is_registered_correctly() {
+        let mut e = EufTheory::new();
+        let f = e.new_func_id();
+        let (a, b) = (e.new_var(), e.new_var());
+        e.push();
+        e.merge(b, a, Some(Lit::new(1, false))); // root = b
+        let fa = e.new_app(f, vec![a]); // a is a non-root here
+        e.cancel_until(0);
+        let fb = e.new_app(f, vec![b]);
+        e.propagate_congruences();
+        assert_ne!(e.find(fa), e.find(fb), "a != b at level 0, so f(a) != f(b)");
+        e.push();
+        e.merge(a, b, Some(Lit::new(2, false)));
+        e.propagate_congruences();
+        assert_eq!(e.find(fa), e.find(fb), "late app must take part in congruence closure");
+    }
+
+    #[test]
+    fn late_app_congruent_at_creation_is_undone_and_redone() {
+        let mut e = EufTheory::new();
+        let f = e.new_func_id();
+        let x = e.new_var();
+        let fx = e.new_app(f, vec![x]);
+        e.push();
+        let fx2 = e.new_app(f, vec![x]); // congruent to fx at creation, at level 1
+        e.propagate_congruences();
+        assert_eq!(e.find(fx), e.find(fx2));
+        e.cancel_until(0);
+        assert_eq!(e.find(fx), e.find(fx2), "congruence holds at every level, it must be re-derived");
+    }
+
+    #[test]
+    fn fuzz_with_terms_created_at_any_level() {
+        for seed in 1..3000u64 {
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut e = EufTheory::new();
+            let mut terms: Vec<Option<(usize, Vec<usize>)>> = Vec::new();
+            for _ in 0..3 + rng.below(3) {
+                e.new_var();
+                terms.push(None);
+            }
+            let mut levels: Vec<Vec<(usize, usize)>> = vec![vec![]];
+            let mut lit = 1;
+            for step in 0..40 {
+                match rng.below(12) {
+                    0..=4 => {
+                        let (a, b) = (rng.below(terms.len()), rng.below(terms.len()));
+                        e.merge(a, b, Some(Lit::new(lit, false)));
+                        lit += 1;
+                        e.propagate_congruences();
+                        levels.last_mut().unwrap().push((a, b));
+                    }
+                    5..=6 if levels.len() < 5 => {
+                        e.push();
+                        levels.push(vec![]);
+                    }
+                    7..=9 => {
+                        if rng.below(4) == 0 {
+                            e.new_var();
+                            terms.push(None);
+                        } else {
+                            let (f, arity) = (rng.below(3), 1 + rng.below(2));
+                            let args: Vec<usize> = (0..arity).map(|_| rng.below(terms.len())).collect();
+                            e.new_app(f, args.clone());
+                            terms.push(Some((f, args)));
+                        }
+                        e.propagate_congruences();
+                    }
+                    _ if levels.len() > 1 => {
+                        let l = rng.below(levels.len() - 1);
+                        e.cancel_until(l);
+                        levels.truncate(l + 1);
+                        // no propagate_congruences here: cancel_until must leave a closed state
                     }
                     _ => continue,
                 }

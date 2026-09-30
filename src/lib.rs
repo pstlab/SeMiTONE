@@ -33,6 +33,18 @@ use rug::Assign;
 pub use sat_solver::Lit;
 use tracing::trace;
 
+pub enum AssertResult {
+    Ok,
+    Backtracked { undone: Vec<Lit> },
+    Conflict { bt_level: usize, clause: Vec<Lit>, undone: Vec<Lit> },
+}
+
+pub enum EncodeResult {
+    Ok(Lit),
+    Backtracked { lit: Lit, undone: Vec<Lit> },
+    Conflict { bt_level: usize, clause: Vec<Lit>, undone: Vec<Lit> },
+}
+
 /// Main solver entry point for propositional, linear arithmetic, and enum constraints.
 ///
 /// The solver combines a SAT core with theory propagation for linear rational
@@ -45,7 +57,6 @@ pub struct SeMiTONE {
     dl_theory: DlTheory,
     euf_theory: EufTheory,
     notified_len: usize,
-    user_scopes: Vec<(usize, usize)>,
 }
 
 impl Default for SeMiTONE {
@@ -65,7 +76,6 @@ impl SeMiTONE {
             dl_theory: DlTheory::new(),
             euf_theory: EufTheory::new(),
             notified_len: 0,
-            user_scopes: Vec::new(),
         }
     }
 
@@ -752,7 +762,7 @@ impl SeMiTONE {
     /// After a successful decision, call [`SeMiTONE::propagate`] to derive its
     /// consequences and detect theory conflicts.
     pub fn decide(&mut self, lit: Lit) -> bool {
-        self.sat_solver.push();
+        self.sat_solver.push_decision();
         self.lra_theory.push();
         self.enum_theory.push();
         self.dl_theory.push();
@@ -825,7 +835,7 @@ impl SeMiTONE {
 
     /// Returns the number of currently active user scopes (`push`/`pop`).
     pub fn user_scopes_len(&self) -> usize {
-        self.user_scopes.len()
+        self.sat_solver.floor_level()
     }
 
     /// Runs SAT + theory propagation until a fixed point or a conflict.
@@ -837,7 +847,7 @@ impl SeMiTONE {
     /// The returned `backtrack_level` is the suggested non-chronological level to
     /// backtrack to, and `no_good` is a conflict explanation suitable for learning.
     pub fn propagate(&mut self) -> Result<(), (usize, Vec<Lit>)> {
-        let base_level = self.user_scopes.last().map(|&(lvl, _)| lvl).unwrap_or(0);
+        let base_level = self.user_scopes_len();
         if let Err((bt_level, conflict)) = self.sat_solver.propagate() {
             return Err((bt_level.max(base_level), conflict));
         }
@@ -1186,28 +1196,27 @@ impl SeMiTONE {
     /// All constraints/decisions added after this call can be discarded by
     /// [`SeMiTONE::pop`].
     pub fn push(&mut self) {
-        let clauses_len = self.sat_solver.clauses.len();
-
         self.sat_solver.push();
         self.lra_theory.push();
         self.enum_theory.push();
         self.dl_theory.push();
-
-        let current_level = self.sat_solver.decision_level();
-        self.user_scopes.push((current_level, clauses_len));
+        // self.euf_theory.push();
     }
 
     /// Restores the previous user scope and discards assertions added in it.
     ///
     /// If no user scope is open, this is a no-op.
-    pub fn pop(&mut self) {
-        if let Some((saved_level, saved_clauses_len)) = self.user_scopes.pop() {
-            self.cancel_until(saved_level - 1);
-            for watch_list in self.sat_solver.watches.iter_mut() {
-                watch_list.retain(|&clause_idx| clause_idx < saved_clauses_len);
-            }
-            self.sat_solver.clauses.truncate(saved_clauses_len);
-        }
+    ///
+    /// Returns the list of retracted literals in reverse chronological order (LIFO).
+    pub fn pop(&mut self) -> Option<Vec<Lit>> {
+        let undone = self.sat_solver.pop()?;
+        let level = self.sat_solver.decision_level();
+        self.lra_theory.cancel_until(level);
+        self.enum_theory.cancel_until(level);
+        self.dl_theory.cancel_until(level);
+        self.euf_theory.cancel_until(level);
+        self.notified_len = self.sat_solver.trail.len();
+        Some(undone)
     }
 
     fn compute_backtrack_level(&self, lemma: &[Lit], root_level: usize) -> usize {
