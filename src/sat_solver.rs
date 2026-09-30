@@ -1,6 +1,8 @@
-use crate::{AssertResult, out_of_bounds};
+use crate::out_of_bounds;
 use std::{collections::VecDeque, fmt, mem, ops};
 use tracing::trace;
+
+pub type Conflict = (usize, Vec<Lit>);
 
 pub(super) struct SatSolver {
     assigns: Vec<Option<bool>>,       // Current assignments of boolean variables (None = unassigned, Some(true/false) = assigned)
@@ -82,7 +84,7 @@ impl SatSolver {
         self.enqueue(lit, None)
     }
 
-    pub(super) fn propagate(&mut self) -> Result<(), (usize, Vec<Lit>)> {
+    pub(super) fn propagate(&mut self) -> Result<(), Conflict> {
         while let Some(lit) = self.prop_q.pop_front() {
             let falsified = !lit;
             let falsified_index = falsified.index();
@@ -133,7 +135,7 @@ impl SatSolver {
         Ok(())
     }
 
-    fn analyze_conflict(&mut self, mut confl: usize) -> (usize, Vec<Lit>) {
+    fn analyze_conflict(&mut self, mut confl: usize) -> Conflict {
         let mut path_c = 0;
         let mut p_lit = None; // Option<Lit>
         let mut learnt = vec![Lit::new(0, false)];
@@ -244,20 +246,20 @@ impl SatSolver {
         }
     }
 
-    pub(super) fn add_clause(&mut self, lits: impl IntoIterator<Item = Lit>) -> AssertResult {
+    pub(super) fn add_clause(&mut self, lits: impl IntoIterator<Item = Lit>) -> Result<(), Conflict> {
         let mut simplified_lits = Vec::new();
 
         for lit in lits {
             match self.lit_value(lit) {
                 Some(true) if self.level(lit.var()) == Some(0) => {
-                    return AssertResult::Ok; // Clause is already satisfied at level 0
+                    return Ok(()); // Clause is already satisfied at level 0
                 }
                 Some(false) if self.level(lit.var()) == Some(0) => {
                     continue;
                 }
                 _ => {
                     if simplified_lits.contains(&!lit) {
-                        return AssertResult::Ok; // Clause is trivially satisfied (tautology)
+                        return Ok(()); // Clause is trivially satisfied (tautology)
                     }
                     if !simplified_lits.contains(&lit) {
                         simplified_lits.push(lit);
@@ -266,22 +268,19 @@ impl SatSolver {
             }
         }
 
-        let mut res = AssertResult::Ok;
         match simplified_lits.len() {
-            0 => return AssertResult::Conflict { bt_level: 0, clause: simplified_lits },
+            0 => return Err((self.floor_level(), simplified_lits)),
             1 => {
                 let floor = self.floor_level();
                 let lit = simplified_lits[0];
                 let lvl = self.level(lit.var()).unwrap_or(0);
                 match self.lit_value(lit) {
-                    Some(true) if lvl <= floor => return AssertResult::Ok,
-                    Some(false) if lvl <= floor => {
-                        return AssertResult::Conflict { bt_level: floor, clause: simplified_lits };
-                    }
+                    Some(true) if lvl <= floor => return Ok(()),
+                    Some(false) if lvl <= floor => return Err((floor, simplified_lits)),
                     _ => {}
                 }
                 if self.decision_level() > floor {
-                    res = AssertResult::Backtracked { undone: self.cancel_until(floor) };
+                    return Err((floor, simplified_lits));
                 }
                 let enqueued = self.enqueue(lit, None);
                 debug_assert!(enqueued);
@@ -297,7 +296,7 @@ impl SatSolver {
                 });
 
                 if self.lit_value(simplified_lits[0]) == Some(false) {
-                    return AssertResult::Conflict { bt_level: self.conflict_bt_level(&simplified_lits), clause: simplified_lits };
+                    return Err((self.conflict_bt_level(&simplified_lits), simplified_lits));
                 }
 
                 let clause_index = self.clauses.len();
@@ -312,15 +311,14 @@ impl SatSolver {
                 if self.lit_value(simplified_lits[0]).is_none() && self.lit_value(simplified_lits[1]) == Some(false) {
                     let assert_level = self.level(simplified_lits[1].var()).unwrap_or(0).max(self.floor_level());
                     if self.decision_level() > assert_level {
-                        res = AssertResult::Backtracked { undone: self.cancel_until(assert_level) };
+                        return Err((assert_level, simplified_lits));
                     }
                     let enqueued = self.enqueue(simplified_lits[0], Some(clause_index));
                     debug_assert!(enqueued);
                 }
             }
         }
-
-        res
+        Ok(())
     }
 
     /// Level to backtrack to so that the (falsified) `clause` becomes asserting; never below `floor`.
@@ -454,26 +452,33 @@ impl fmt::Display for Clause {
 mod tests {
     use super::*;
 
-    fn decide(sat: &mut SatSolver, lit: Lit) -> Result<(), (usize, Vec<Lit>)> {
+    fn decide(sat: &mut SatSolver, lit: Lit) -> Result<(), Conflict> {
         sat.push_decision();
         sat.enqueue_decision(lit);
         sat.propagate()
     }
 
     #[test]
-    fn unit_clause_at_decision_level_is_asserted_at_root() {
+    fn unit_clause_at_decision_level_returns_conflict_to_backtrack() {
         let mut sat = SatSolver::new();
         let var = sat.mk_var();
 
         sat.push_decision();
         assert_eq!(sat.floor_level(), 0);
-        let result = sat.add_clause([Lit::new(var, false)]);
-        assert_eq!(result, AssertResult::Backtracked { undone: vec![] });
-        assert_eq!(sat.decision_level(), 0);
-        assert_eq!(sat.level(var), Some(0));
+
+        let lit = Lit::new(var, false);
+
+        let result = sat.add_clause([lit]);
+        assert_eq!(result, Err((0, vec![lit])));
 
         sat.cancel_until(0);
-        assert_eq!(sat.lit_value(Lit::new(var, false)), Some(true));
+        assert_eq!(sat.decision_level(), 0);
+
+        let retry_result = sat.add_clause([lit]);
+        assert_eq!(retry_result, Ok(()));
+
+        assert_eq!(sat.level(var), Some(0));
+        assert_eq!(sat.lit_value(lit), Some(true));
     }
 
     #[test]
@@ -490,18 +495,12 @@ mod tests {
         let b9 = sat.mk_var();
 
         // [(b1 ∨ b2) ∧ (b1 ∨ b3 ∨ b7) ∧ (¬b2 ∨ ¬b3 ∨ b4) ∧ (¬b4 ∨ b5 ∨ b8) ∧ (¬b4 ∨ b6 ∨ b9) ∧ (¬b5 ∨ ¬b6)]
-        let result = sat.add_clause([Lit::new(b1, false), Lit::new(b2, false)]);
-        assert_eq!(result, AssertResult::Ok);
-        let result = sat.add_clause([Lit::new(b1, false), Lit::new(b3, false), Lit::new(b7, false)]);
-        assert_eq!(result, AssertResult::Ok);
-        let result = sat.add_clause([Lit::new(b2, true), Lit::new(b3, true), Lit::new(b4, false)]);
-        assert_eq!(result, AssertResult::Ok);
-        let result = sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]);
-        assert_eq!(result, AssertResult::Ok);
-        let result = sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]);
-        assert_eq!(result, AssertResult::Ok);
-        let result = sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]);
-        assert_eq!(result, AssertResult::Ok);
+        assert!(sat.add_clause([Lit::new(b1, false), Lit::new(b2, false)]).is_ok());
+        assert!(sat.add_clause([Lit::new(b1, false), Lit::new(b3, false), Lit::new(b7, false)]).is_ok());
+        assert!(sat.add_clause([Lit::new(b2, true), Lit::new(b3, true), Lit::new(b4, false)]).is_ok());
+        assert!(sat.add_clause([Lit::new(b4, true), Lit::new(b5, false), Lit::new(b8, false)]).is_ok());
+        assert!(sat.add_clause([Lit::new(b4, true), Lit::new(b6, false), Lit::new(b9, false)]).is_ok());
+        assert!(sat.add_clause([Lit::new(b5, true), Lit::new(b6, true)]).is_ok());
 
         // Decision: ¬b7
         decide(&mut sat, Lit::new(b7, true)).expect("Should be able to decide ¬b7");
@@ -518,7 +517,6 @@ mod tests {
         assert!(conflict_clause.contains(&Lit::new(b8, false)));
         assert!(conflict_clause.contains(&Lit::new(b9, false)));
         sat.cancel_until(bt_level);
-        let result = sat.add_clause(conflict_clause);
-        assert_eq!(result, AssertResult::Ok);
+        assert!(sat.add_clause(conflict_clause).is_ok());
     }
 }

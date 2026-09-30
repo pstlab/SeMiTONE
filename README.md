@@ -26,10 +26,10 @@ SeMiTONE is designed for domains that require tightly coupled, custom logic reas
 
 ## 🛠️ Quick Look
 
-`assert` adds a constraint to the current context; it does not by itself check full theory feasibility. Call `propagate` to process queued SAT assignments and detect theory conflicts. Its result is `Ok(())` or `Err((backtrack_level, clause))`.
+`assert` adds a constraint to the current context and can report an immediate conflict. It does not by itself check full theory feasibility. Call `propagate` to process queued SAT assignments and detect theory conflicts. Both methods return `Ok(())` on success or `Err((backtrack_level, clause))` on conflict; the clause is an explanation suitable for learning, and the level is the suggested non-chronological backtrack target.
 
 ```rust
-use semitone::{AssertResult, SeMiTONE};
+use semitone::SeMiTONE;
 
 let mut solver = SeMiTONE::new();
 
@@ -38,15 +38,9 @@ let y = solver.new_real();
 let state = solver.new_enum([1, 2, 3]);
 
 let constraints = (&x + &y).eq(10) & x.gt(6);
-match solver.assert(constraints) {
-    AssertResult::Ok => {}
-    AssertResult::Backtracked { undone } => {
-        println!("Assignments retracted while asserting: {undone:?}");
-    }
-    AssertResult::Conflict { bt_level, clause } => {
-        println!("Conflict at backtrack level {bt_level}: {clause:?}");
-        return;
-    }
+if let Err((level, clause)) = solver.assert(constraints) {
+    println!("Conflict at backtrack level {level}: {clause:?}");
+    return;
 }
 
 match solver.propagate() {
@@ -58,6 +52,8 @@ match solver.propagate() {
                     println!("Conflict at backtrack level {level}: {clause:?}");
                 }
             }
+        } else {
+            println!("The enum decision conflicts with the current assignment.");
         }
     }
     Err((level, clause)) => {

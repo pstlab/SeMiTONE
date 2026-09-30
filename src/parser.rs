@@ -131,11 +131,8 @@ impl<'a> SmtParser<'a> {
                 }
 
                 let bool_expr = self.translate_bool_term(&term);
-                match self.solver.smt.assert(&bool_expr) {
-                    crate::AssertResult::Ok | crate::AssertResult::Backtracked { .. } => {}
-                    crate::AssertResult::Conflict { .. } => {
-                        self.is_unsat = true;
-                    }
+                if self.solver.smt.assert(&bool_expr).is_err() {
+                    self.is_unsat = true;
                 }
             }
             concrete::Command::CheckSat => {
@@ -393,14 +390,18 @@ impl<'a> SmtParser<'a> {
                                 let fresh_arith_expr = if sort_type == "Int" { self.solver.smt.new_int() } else { self.solver.smt.new_real() };
 
                                 let bridge_eq = fresh_arith_expr.eq(&arith_expr);
-                                self.solver.smt.assert(&bridge_eq);
+                                if self.solver.smt.assert(&bridge_eq).is_err() {
+                                    self.is_unsat = true;
+                                }
 
                                 for (old_euf, old_arith, old_sort) in &self.purified_arith_vars {
                                     if old_sort == &sort_type {
                                         let euf_eq = fresh_euf_expr.eq(old_euf.clone());
                                         let arith_eq = fresh_arith_expr.eq(old_arith);
                                         let iff_expr = euf_eq.eq(&arith_eq);
-                                        self.solver.smt.assert(&iff_expr);
+                                        if self.solver.smt.assert(&iff_expr).is_err() {
+                                            self.is_unsat = true;
+                                        }
                                     }
                                 }
 
@@ -413,13 +414,17 @@ impl<'a> SmtParser<'a> {
                                 let fresh_bool_expr = self.solver.smt.new_bool();
 
                                 let bridge_eq = fresh_bool_expr.eq(&bool_expr);
-                                self.solver.smt.assert(&bridge_eq);
+                                if self.solver.smt.assert(&bridge_eq).is_err() {
+                                    self.is_unsat = true;
+                                }
 
                                 for (old_euf, old_bool) in &self.purified_bool_vars {
                                     let euf_eq = fresh_euf_expr.eq(old_euf.clone());
                                     let bool_eq = fresh_bool_expr.eq(old_bool);
                                     let iff_expr = euf_eq.eq(&bool_eq);
-                                    self.solver.smt.assert(&iff_expr);
+                                    if self.solver.smt.assert(&iff_expr).is_err() {
+                                        self.is_unsat = true;
+                                    }
                                 }
 
                                 self.purified_bool_vars.push((fresh_euf_expr.clone(), fresh_bool_expr));
