@@ -295,25 +295,31 @@ impl SatSolver {
                     }
                 });
 
-                if self.lit_value(simplified_lits[0]) == Some(false) {
+                let first = simplified_lits[0];
+                let second = simplified_lits[1];
+
+                if self.lit_value(first) == Some(false) {
                     return Err((self.conflict_bt_level(&simplified_lits), simplified_lits));
                 }
 
-                let clause_index = self.clauses.len();
-                let clause = Clause { lits: simplified_lits.clone() };
-                trace!("Adding clause {}: {}", clause_index, clause);
-
-                for lit in &clause.lits[0..2] {
-                    self.watches[lit.index()].push(clause_index);
-                }
-                self.clauses.push(clause);
-
-                if self.lit_value(simplified_lits[0]).is_none() && self.lit_value(simplified_lits[1]) == Some(false) {
-                    let assert_level = self.level(simplified_lits[1].var()).unwrap_or(0).max(self.floor_level());
+                let is_unit = self.lit_value(first).is_none() && self.lit_value(second) == Some(false);
+                if is_unit {
+                    let assert_level = self.level(second.var()).unwrap_or(0).max(self.floor_level());
                     if self.decision_level() > assert_level {
                         return Err((assert_level, simplified_lits));
                     }
-                    let enqueued = self.enqueue(simplified_lits[0], Some(clause_index));
+                }
+
+                let clause_index = self.clauses.len();
+                let clause = Clause::new(simplified_lits);
+                trace!("Adding clause {}: {}", clause_index, clause);
+
+                self.watches[clause.lits[0].index()].push(clause_index);
+                self.watches[clause.lits[1].index()].push(clause_index);
+                self.clauses.push(clause);
+
+                if is_unit {
+                    let enqueued = self.enqueue(first, Some(clause_index));
                     debug_assert!(enqueued);
                 }
             }
@@ -372,6 +378,33 @@ impl SatSolver {
         }
         self.prop_q.retain(|l| self.assigns[l.var()] == Some(!l.sign()));
         retracted
+    }
+
+    /// Simplifies the clauses in the solver.
+    pub(super) fn simplify_db(&mut self) -> bool {
+        assert_eq!(self.decision_level(), 0, "simplify_db should only be called at decision level 0");
+
+        if self.propagate().is_err() {
+            return false;
+        }
+
+        for lit in &self.trail {
+            self.reason[lit.var()] = None;
+        }
+
+        let mut clauses = mem::take(&mut self.clauses);
+        clauses.retain_mut(|c| !c.simplify(self));
+        self.clauses = clauses;
+
+        for w in self.watches.iter_mut() {
+            w.clear();
+        }
+        for (idx, c) in self.clauses.iter().enumerate() {
+            debug_assert!(c.lits.len() >= 2, "unit/empty clause survived root propagation");
+            self.watches[c.lits[0].index()].push(idx);
+            self.watches[c.lits[1].index()].push(idx);
+        }
+        true
     }
 }
 
@@ -439,6 +472,22 @@ impl fmt::Display for Lit {
 
 pub(super) struct Clause {
     lits: Vec<Lit>, // List of literals in the clause
+}
+
+impl Clause {
+    fn new(lits: Vec<Lit>) -> Self {
+        Clause { lits }
+    }
+
+    /// Simplifies the clause by removing literals that are already satisfied or falsified at decision level 0.
+    /// Returns true if the clause is satisfied, false otherwise.
+    fn simplify(&mut self, sat: &SatSolver) -> bool {
+        if self.lits.iter().any(|&l| sat.lit_value(l) == Some(true)) {
+            return true;
+        }
+        self.lits.retain(|&l| sat.lit_value(l).is_none());
+        false
+    }
 }
 
 impl fmt::Display for Clause {
@@ -518,5 +567,25 @@ mod tests {
         assert!(conflict_clause.contains(&Lit::new(b9, false)));
         sat.cancel_until(bt_level);
         assert!(sat.add_clause(conflict_clause).is_ok());
+    }
+
+    #[test]
+    fn simplify_removes_satisfied_clauses_and_false_literals() {
+        let mut sat = SatSolver::new();
+        let (a, b, c, d) = (sat.mk_var(), sat.mk_var(), sat.mk_var(), sat.mk_var());
+        let (la, lb, lc, ld) = (Lit::new(a, false), Lit::new(b, false), Lit::new(c, false), Lit::new(d, false));
+
+        assert!(sat.add_clause([la, lb]).is_ok()); // -> (a ∨ b)
+        assert!(sat.add_clause([!la, lc, ld]).is_ok()); // -> (c ∨ d)
+        assert!(sat.add_clause([!la, lb, lc]).is_ok()); // -> (b ∨ c)
+        assert!(sat.add_clause([la]).is_ok()); // -> (a) should simplify the other clauses
+
+        assert!(sat.simplify_db());
+        assert_eq!(sat.clauses.len(), 2);
+        assert!(sat.clauses.iter().all(|cl| cl.lits.len() == 2));
+
+        decide(&mut sat, !lc).expect("no conflict");
+        assert_eq!(sat.lit_value(ld), Some(true));
+        assert_eq!(sat.lit_value(lb), Some(true));
     }
 }

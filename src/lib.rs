@@ -1249,6 +1249,11 @@ impl SeMiTONE {
         }
         Ok(())
     }
+
+    /// Simplifies the SAT solver's internal database of clauses and variables.
+    pub fn simplify(&mut self) -> bool {
+        self.sat_solver.simplify_db()
+    }
 }
 
 #[cold]
