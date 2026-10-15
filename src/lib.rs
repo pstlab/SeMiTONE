@@ -178,7 +178,12 @@ impl SeMiTONE {
                 let mut clause = Vec::with_capacity(args.len());
                 for arg in args {
                     let lit = self.encode_bool(arg)?;
-                    clause.push(if polarity { lit } else { !lit });
+                    let target_lit = if polarity { lit } else { !lit };
+                    match self.get_lit_val_and_level(target_lit) {
+                        Some((true, 0)) => return Ok(()),
+                        Some((false, 0)) => continue,
+                        _ => clause.push(target_lit),
+                    }
                 }
                 self.add_clause(clause)
             }
