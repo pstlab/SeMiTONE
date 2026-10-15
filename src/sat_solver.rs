@@ -343,19 +343,31 @@ impl SatSolver {
     }
 
     #[inline]
-    pub(super) fn value(&self, var: usize) -> &Option<bool> {
-        self.assigns.get(var).unwrap_or_else(|| out_of_bounds(var))
+    pub(super) fn value(&self, var: usize) -> Option<bool> {
+        self.assigns.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
     }
 
     #[inline]
     pub(super) fn lit_value(&self, lit: Lit) -> Option<bool> {
-        let val = *self.value(lit.var());
+        let val = self.value(lit.var());
         if lit.sign() { val.map(|v| !v) } else { val }
     }
 
     #[inline]
     pub(super) fn level(&self, var: usize) -> Option<usize> {
         self.level.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
+    }
+
+    #[inline]
+    pub(super) fn lit_level(&self, lit: Lit) -> Option<usize> {
+        self.level(lit.var())
+    }
+
+    #[inline]
+    pub(super) fn lit_value_and_level(&self, lit: Lit) -> Option<(bool, usize)> {
+        let val = self.lit_value(lit)?;
+        let lvl = self.level(lit.var()).expect("Level should be set for assigned variable");
+        Some((val, lvl))
     }
 
     pub(super) fn decision_level(&self) -> usize {

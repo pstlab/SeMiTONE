@@ -182,70 +182,20 @@ impl SeMiTONE {
                 }
                 self.add_clause(clause)
             }
-            (BoolExpr::Lt(e1, e2), _) | (BoolExpr::Le(e1, e2), _) | (BoolExpr::Ge(e1, e2), _) | (BoolExpr::Gt(e1, e2), _) => {
-                let (vars, const_term) = self.diff(e1, e2);
-
-                if vars.is_empty() {
-                    let is_sat = match expr {
-                        BoolExpr::Lt(_, _) => const_term.is_negative(),
-                        BoolExpr::Le(_, _) => const_term.is_negative() || const_term.is_zero(),
-                        BoolExpr::Ge(_, _) => !const_term.is_negative(),
-                        BoolExpr::Gt(_, _) => const_term.is_positive(),
-                        _ => unreachable!(),
-                    };
-
-                    if if polarity { is_sat } else { !is_sat } {
-                        return Ok(());
-                    } else {
-                        // Conflitto fittizio al livello root (0) con clausola vuota (trivially unsat)
-                        return Err((0, vec![]));
-                    }
-                }
-
-                let (is_upper_bound, is_strict) = match (expr, polarity) {
-                    (BoolExpr::Lt(_, _), true) => (true, true),
-                    (BoolExpr::Lt(_, _), false) => (false, false),
-                    (BoolExpr::Le(_, _), true) => (true, false),
-                    (BoolExpr::Le(_, _), false) => (false, true),
-                    (BoolExpr::Ge(_, _), true) => (false, false),
-                    (BoolExpr::Ge(_, _), false) => (true, true),
-                    (BoolExpr::Gt(_, _), true) => (false, true),
-                    (BoolExpr::Gt(_, _), false) => (true, false),
-                    _ => unreachable!(),
-                };
-
-                let lit = if vars.len() == 1 {
-                    let (var, coeff) = vars.iter().next().unwrap();
-                    let is_int = self.lra_theory.is_int_var(*var);
-                    let is_upper_for_var = is_upper_bound == coeff.is_positive();
-
-                    let bound = if is_int {
-                        let val = -const_term / coeff.clone();
-                        let tight_val = tighten_int_bound(val, is_upper_for_var, is_strict);
-                        InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
-                    } else {
-                        let eps_shift = if is_strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
-                        InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
-                    };
-
-                    let constraint = if is_upper_for_var { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
-                    self.get_or_create_proxy(constraint)
-                } else {
-                    let slack = self.lra_theory.get_or_create_slack(vars);
-                    let is_int = self.lra_theory.is_int_var(slack);
-
-                    let bound = if is_int {
-                        let tight_val = tighten_int_bound(-const_term, is_upper_bound, is_strict);
-                        InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
-                    } else {
-                        let eps_shift = if is_strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
-                        InfRational::new(Rational::Finite(-const_term), eps_shift)
-                    };
-
-                    let constraint = if is_upper_bound { TheoryConstraint::LraUb(slack, bound) } else { TheoryConstraint::LraLb(slack, bound) };
-                    self.get_or_create_proxy(constraint)
-                };
-
+            (BoolExpr::Lt(e1, e2), true) | (BoolExpr::Ge(e1, e2), false) => {
+                let lit = self.mk_le(e1, e2, true);
+                self.add_clause([lit])
+            }
+            (BoolExpr::Le(e1, e2), true) | (BoolExpr::Gt(e1, e2), false) => {
+                let lit = self.mk_le(e1, e2, false);
+                self.add_clause([lit])
+            }
+            (BoolExpr::Ge(e1, e2), true) | (BoolExpr::Lt(e1, e2), false) => {
+                let lit = self.mk_ge(e1, e2, false);
+                self.add_clause([lit])
+            }
+            (BoolExpr::Gt(e1, e2), true) | (BoolExpr::Le(e1, e2), false) => {
+                let lit = self.mk_ge(e1, e2, true);
                 self.add_clause([lit])
             }
             _ => {
@@ -288,45 +238,81 @@ impl SeMiTONE {
             BoolExpr::And(terms) => {
                 let mut lits = Vec::with_capacity(terms.len());
                 for term in terms {
-                    lits.push(self.encode_bool(term)?);
+                    let lit = self.encode_bool(term)?;
+                    match self.get_lit_val_and_level(lit) {
+                        Some((false, 0)) => return Ok(Lit::FALSE),
+                        Some((true, 0)) => continue,
+                        _ => {
+                            if lits.contains(&!lit) {
+                                return Ok(Lit::FALSE);
+                            }
+                            if !lits.contains(&lit) {
+                                lits.push(lit);
+                            }
+                        }
+                    }
                 }
 
-                let proxy_var = self.sat_solver.mk_var();
-                let proxy_lit = Lit::new(proxy_var, true);
-                let mut clauses = Vec::with_capacity(lits.len() + 1);
+                match lits.len() {
+                    0 => Ok(Lit::TRUE),
+                    1 => Ok(lits[0]),
+                    _ => {
+                        let proxy_var = self.sat_solver.mk_var();
+                        let proxy_lit = Lit::new(proxy_var, true);
+                        let mut clauses = Vec::with_capacity(lits.len() + 1);
 
-                for &lit in &lits {
-                    clauses.push(vec![!proxy_lit, lit]);
+                        for &lit in &lits {
+                            clauses.push(vec![!proxy_lit, lit]);
+                        }
+
+                        let mut big_clause: Vec<Lit> = lits.iter().map(|&l| !l).collect();
+                        big_clause.push(proxy_lit);
+                        clauses.push(big_clause);
+
+                        self.add_clauses(clauses)?;
+                        Ok(proxy_lit)
+                    }
                 }
-
-                let mut big_clause: Vec<Lit> = lits.iter().map(|&l| !l).collect();
-                big_clause.push(proxy_lit);
-                clauses.push(big_clause);
-
-                self.add_clauses(clauses)?;
-                Ok(proxy_lit)
             }
 
             BoolExpr::Or(terms) => {
                 let mut lits = Vec::with_capacity(terms.len());
                 for term in terms {
-                    lits.push(self.encode_bool(term)?);
+                    let lit = self.encode_bool(term)?;
+                    match self.get_lit_val_and_level(lit) {
+                        Some((true, 0)) => return Ok(Lit::TRUE),
+                        Some((false, 0)) => continue,
+                        _ => {
+                            if lits.contains(&!lit) {
+                                return Ok(Lit::TRUE);
+                            }
+                            if !lits.contains(&lit) {
+                                lits.push(lit);
+                            }
+                        }
+                    }
                 }
 
-                let proxy_var = self.sat_solver.mk_var();
-                let proxy_lit = Lit::new(proxy_var, true);
-                let mut clauses = Vec::with_capacity(lits.len() + 1);
+                match lits.len() {
+                    0 => Ok(Lit::FALSE),
+                    1 => Ok(lits[0]),
+                    _ => {
+                        let proxy_var = self.sat_solver.mk_var();
+                        let proxy_lit = Lit::new(proxy_var, true);
+                        let mut clauses = Vec::with_capacity(lits.len() + 1);
 
-                for &lit in &lits {
-                    clauses.push(vec![!lit, proxy_lit]);
+                        for &lit in &lits {
+                            clauses.push(vec![!lit, proxy_lit]);
+                        }
+
+                        let mut big_clause = lits;
+                        big_clause.push(!proxy_lit);
+                        clauses.push(big_clause);
+
+                        self.add_clauses(clauses)?;
+                        Ok(proxy_lit)
+                    }
                 }
-
-                let mut big_clause = lits.clone();
-                big_clause.push(!proxy_lit);
-                clauses.push(big_clause);
-
-                self.add_clauses(clauses)?;
-                Ok(proxy_lit)
             }
             BoolExpr::Lt(e1, e2) => Ok(self.mk_le(e1, e2, true)),
             BoolExpr::Le(e1, e2) => Ok(self.mk_le(e1, e2, false)),
@@ -350,6 +336,19 @@ impl SeMiTONE {
             (Expr::Bool(b1), Expr::Bool(b2)) => {
                 let l1 = self.encode_bool(b1)?;
                 let l2 = self.encode_bool(b2)?;
+
+                if l1 == l2 {
+                    return Ok(Lit::TRUE);
+                }
+                if l1 == !l2 {
+                    return Ok(Lit::FALSE);
+                }
+                if let Some((val, 0)) = self.get_lit_val_and_level(l1) {
+                    return Ok(if val { l2 } else { !l2 });
+                }
+                if let Some((val, 0)) = self.get_lit_val_and_level(l2) {
+                    return Ok(if val { l1 } else { !l1 });
+                }
 
                 let p = self.new_lit();
                 self.add_clauses([vec![!p, l1, !l2], vec![!p, !l1, l2], vec![p, l1, l2], vec![p, !l1, !l2]])?;
@@ -407,60 +406,84 @@ impl SeMiTONE {
                     let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v1.0, val));
                     let p2 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v2.0, val));
 
-                    let and_proxy_var = self.sat_solver.mk_var();
-                    let and_proxy = Lit::new(and_proxy_var, false);
+                    match (self.get_lit_val_and_level(p1), self.get_lit_val_and_level(p2)) {
+                        (Some((false, 0)), _) | (_, Some((false, 0))) => continue,
+                        (Some((true, 0)), Some((true, 0))) => return Ok(Lit::TRUE),
+                        (Some((true, 0)), _) => lits.push(p2),
+                        (_, Some((true, 0))) => lits.push(p1),
+                        _ => {
+                            let and_proxy_var = self.sat_solver.mk_var();
+                            let and_proxy = Lit::new(and_proxy_var, false);
 
-                    clauses.push(vec![!and_proxy, p1]);
-                    clauses.push(vec![!and_proxy, p2]);
-                    clauses.push(vec![!p1, !p2, and_proxy]);
+                            clauses.push(vec![!and_proxy, p1]);
+                            clauses.push(vec![!and_proxy, p2]);
+                            clauses.push(vec![!p1, !p2, and_proxy]);
 
-                    lits.push(and_proxy);
+                            lits.push(and_proxy);
+                        }
+                    }
                 }
 
-                let or_proxy_var = self.sat_solver.mk_var();
-                let or_proxy = Lit::new(or_proxy_var, false);
+                match lits.len() {
+                    0 => Ok(Lit::FALSE),
+                    1 => {
+                        self.add_clauses(clauses)?;
+                        Ok(lits[0])
+                    }
+                    _ => {
+                        let or_proxy_var = self.sat_solver.mk_var();
+                        let or_proxy = Lit::new(or_proxy_var, false);
 
-                for &lit in &lits {
-                    clauses.push(vec![!lit, or_proxy]);
+                        for &lit in &lits {
+                            clauses.push(vec![!lit, or_proxy]);
+                        }
+
+                        let mut big_clause = lits;
+                        big_clause.push(!or_proxy);
+                        clauses.push(big_clause);
+
+                        self.add_clauses(clauses)?;
+                        Ok(or_proxy)
+                    }
                 }
-
-                let mut big_clause = lits;
-                big_clause.push(!or_proxy);
-                clauses.push(big_clause);
-
-                self.add_clauses(clauses)?;
-                Ok(or_proxy)
             }
         }
     }
 
+    #[inline]
     fn mk_le(&mut self, e1: &ArithExpr, e2: &ArithExpr, strict: bool) -> Lit {
+        self.mk_ineq(e1, e2, true, strict)
+    }
+
+    #[inline]
+    fn mk_ge(&mut self, e1: &ArithExpr, e2: &ArithExpr, strict: bool) -> Lit {
+        self.mk_ineq(e1, e2, false, strict)
+    }
+
+    fn mk_ineq(&mut self, e1: &ArithExpr, e2: &ArithExpr, is_upper_bound: bool, strict: bool) -> Lit {
         let (vars, const_term) = self.diff(e1, e2);
 
         match vars.len() {
             0 => {
-                if if strict { const_term.is_negative() } else { const_term.is_negative() || const_term.is_zero() } {
-                    Lit::TRUE
-                } else {
-                    Lit::FALSE
-                }
+                let is_sat = if is_upper_bound { if strict { const_term.is_negative() } else { !const_term.is_positive() } } else { if strict { const_term.is_positive() } else { !const_term.is_negative() } };
+                if is_sat { Lit::TRUE } else { Lit::FALSE }
             }
             1 => {
                 let (var, coeff) = vars.iter().next().unwrap();
                 let is_int = self.lra_theory.is_int_var(*var);
-                let is_upper_bound = coeff.is_positive();
+                let is_upper_for_var = is_upper_bound == coeff.is_positive();
 
                 let bound = if is_int {
                     let val = -const_term / coeff.clone();
-                    let tight_val = tighten_int_bound(val, is_upper_bound, strict);
+                    let tight_val = tighten_int_bound(val, is_upper_for_var, strict);
                     InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
                 } else {
-                    let eps_shift = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
+                    let eps_shift = if strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
                     InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
                 };
 
                 if self.sat_solver.decision_level() == 0 {
-                    if is_upper_bound {
+                    if is_upper_for_var {
                         if self.lra_theory.ub(*var) <= &bound {
                             return Lit::TRUE;
                         }
@@ -477,32 +500,41 @@ impl SeMiTONE {
                     }
                 }
 
-                let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
-                self.get_or_create_proxy(bound)
+                let constraint = if is_upper_for_var { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
+                self.get_or_create_proxy(constraint)
             }
             _ => {
                 let slack = self.lra_theory.get_or_create_slack(vars);
                 let is_int = self.lra_theory.is_int_var(slack);
 
                 let bound = if is_int {
-                    let tight_val = tighten_int_bound(-const_term, true, strict);
+                    let tight_val = tighten_int_bound(-const_term, is_upper_bound, strict);
                     InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
                 } else {
-                    let eps_shift = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
+                    let eps_shift = if strict { if is_upper_bound { rug::Rational::from(-1) } else { rug::Rational::from(1) } } else { rug::Rational::from(0) };
                     InfRational::new(Rational::Finite(-const_term), eps_shift)
                 };
 
                 if self.sat_solver.decision_level() == 0 {
-                    if self.lra_theory.ub(slack) <= &bound {
-                        return Lit::TRUE;
-                    }
-                    if self.lra_theory.lb(slack) > &bound {
-                        return Lit::FALSE;
+                    if is_upper_bound {
+                        if self.lra_theory.ub(slack) <= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.lb(slack) > &bound {
+                            return Lit::FALSE;
+                        }
+                    } else {
+                        if self.lra_theory.lb(slack) >= &bound {
+                            return Lit::TRUE;
+                        }
+                        if self.lra_theory.ub(slack) < &bound {
+                            return Lit::FALSE;
+                        }
                     }
                 }
 
-                let bound = TheoryConstraint::LraUb(slack, bound);
-                self.get_or_create_proxy(bound)
+                let constraint = if is_upper_bound { TheoryConstraint::LraUb(slack, bound) } else { TheoryConstraint::LraLb(slack, bound) };
+                self.get_or_create_proxy(constraint)
             }
         }
     }
@@ -514,93 +546,18 @@ impl SeMiTONE {
 
         let le_lit = self.mk_le(e1, e2, false);
         let ge_lit = self.mk_ge(e1, e2, false);
-        if le_lit == Lit::TRUE && ge_lit == Lit::TRUE {
-            return Ok(Lit::TRUE);
-        }
-        if le_lit == Lit::FALSE || ge_lit == Lit::FALSE {
-            return Ok(Lit::FALSE);
+
+        match (self.get_lit_val_and_level(le_lit), self.get_lit_val_and_level(ge_lit)) {
+            (Some((false, 0)), _) | (_, Some((false, 0))) => return Ok(Lit::FALSE),
+            (Some((true, 0)), Some((true, 0))) => return Ok(Lit::TRUE),
+            (Some((true, 0)), _) => return Ok(ge_lit),
+            (_, Some((true, 0))) => return Ok(le_lit),
+            _ => {}
         }
 
         let p = self.new_lit();
-        // p -> (x <= y)
-        // p -> (x >= y)
-        // (x <= y) ∧ (x >= y) -> p
         self.add_clauses([vec![!p, le_lit], vec![!p, ge_lit], vec![!le_lit, !ge_lit, p]])?;
         Ok(p)
-    }
-
-    fn mk_ge(&mut self, e1: &ArithExpr, e2: &ArithExpr, strict: bool) -> Lit {
-        let (vars, const_term) = self.diff(e1, e2);
-
-        match vars.len() {
-            0 => {
-                if if strict { const_term.is_positive() } else { const_term.is_positive() || const_term.is_zero() } {
-                    Lit::TRUE
-                } else {
-                    Lit::FALSE
-                }
-            }
-            1 => {
-                let (var, coeff) = vars.iter().next().unwrap();
-                let is_int = self.lra_theory.is_int_var(*var);
-
-                let is_upper_bound = !coeff.is_positive();
-
-                let bound = if is_int {
-                    let val = -const_term / coeff.clone();
-                    let tight_val = tighten_int_bound(val, is_upper_bound, strict);
-                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
-                } else {
-                    let eps_shift = if strict { rug::Rational::from(1) } else { rug::Rational::from(0) };
-                    InfRational::new(Rational::Finite(-const_term / coeff.clone()), eps_shift / coeff)
-                };
-
-                if self.sat_solver.decision_level() == 0 {
-                    if is_upper_bound {
-                        if self.lra_theory.ub(*var) <= &bound {
-                            return Lit::TRUE;
-                        }
-                        if self.lra_theory.lb(*var) > &bound {
-                            return Lit::FALSE;
-                        }
-                    } else {
-                        if self.lra_theory.lb(*var) >= &bound {
-                            return Lit::TRUE;
-                        }
-                        if self.lra_theory.ub(*var) < &bound {
-                            return Lit::FALSE;
-                        }
-                    }
-                }
-
-                let bound = if is_upper_bound { TheoryConstraint::LraUb(*var, bound) } else { TheoryConstraint::LraLb(*var, bound) };
-                self.get_or_create_proxy(bound)
-            }
-            _ => {
-                let slack = self.lra_theory.get_or_create_slack(vars);
-                let is_int = self.lra_theory.is_int_var(slack);
-
-                let bound = if is_int {
-                    let tight_val = tighten_int_bound(-const_term, false, strict);
-                    InfRational::new(Rational::Finite(tight_val), rug::Rational::from(0))
-                } else {
-                    let eps_shift = if strict { rug::Rational::from(1) } else { rug::Rational::from(0) };
-                    InfRational::new(Rational::Finite(-const_term), eps_shift)
-                };
-
-                if self.sat_solver.decision_level() == 0 {
-                    if self.lra_theory.lb(slack) >= &bound {
-                        return Lit::TRUE;
-                    }
-                    if self.lra_theory.ub(slack) < &bound {
-                        return Lit::FALSE;
-                    }
-                }
-
-                let bound = TheoryConstraint::LraLb(slack, bound);
-                self.get_or_create_proxy(bound)
-            }
-        }
     }
 
     fn mk_dl_le(&mut self, from: usize, to: usize, bound: rug::Rational, strict: bool) -> Lit {
@@ -618,6 +575,14 @@ impl SeMiTONE {
     fn mk_dl_eq(&mut self, from: usize, to: usize, bound: rug::Rational) -> Result<Lit, Conflict> {
         let le_lit = self.mk_dl_le(from, to, bound.clone(), false);
         let ge_lit = self.mk_dl_ge(from, to, bound, false);
+
+        match (self.get_lit_val_and_level(le_lit), self.get_lit_val_and_level(ge_lit)) {
+            (Some((false, 0)), _) | (_, Some((false, 0))) => return Ok(Lit::FALSE),
+            (Some((true, 0)), Some((true, 0))) => return Ok(Lit::TRUE),
+            (Some((true, 0)), _) => return Ok(ge_lit),
+            (_, Some((true, 0))) => return Ok(le_lit),
+            _ => {}
+        }
 
         let p = self.new_lit();
         self.add_clauses([vec![!p, le_lit], vec![!p, ge_lit], vec![!le_lit, !ge_lit, p]])?;
@@ -865,21 +830,34 @@ impl SeMiTONE {
                 };
 
                 if let Err(lemma) = theory_result {
-                    return Err((self.compute_backtrack_level(&lemma, base_level), lemma));
+                    return Err((self.sat_solver.conflict_bt_level(&lemma), lemma));
                 }
             }
             self.notified_len += 1;
         }
 
         if let Err(conflict) = self.lra_theory.check() {
-            return Err((self.compute_backtrack_level(&conflict, base_level), conflict));
+            return Err((self.sat_solver.conflict_bt_level(&conflict), conflict));
         }
         Ok(())
     }
 
+    /// Returns the decision level at which the literal was assigned, if any.
+    #[inline]
+    pub fn get_lit_level(&self, lit: Lit) -> Option<usize> {
+        self.sat_solver.lit_level(lit)
+    }
+
     /// Returns the assigned value of a literal in the current trail.
+    #[inline]
     pub fn get_lit_val(&self, lit: Lit) -> Option<bool> {
         self.sat_solver.lit_value(lit)
+    }
+
+    /// Returns the assigned value and decision level of a literal in the current trail.
+    #[inline]
+    pub fn get_lit_val_and_level(&self, lit: Lit) -> Option<(bool, usize)> {
+        self.sat_solver.lit_value_and_level(lit)
     }
 
     /// Returns the assigned value of a Boolean expression when it is fully determined.
@@ -887,7 +865,7 @@ impl SeMiTONE {
         match expr {
             BoolExpr::True => Some(true),
             BoolExpr::False => Some(false),
-            BoolExpr::Var(v) => *self.sat_solver.value(v.0),
+            BoolExpr::Var(v) => self.sat_solver.value(v.0),
             BoolExpr::Not(inner) => self.get_bool_val(inner).map(|val| !val),
             BoolExpr::And(args) => {
                 let mut result = Some(true);
@@ -1152,7 +1130,7 @@ impl SeMiTONE {
         self.lra_theory.push();
         self.enum_theory.push();
         self.dl_theory.push();
-        // self.euf_theory.push();
+        self.euf_theory.push();
     }
 
     /// Restores the previous user scope and discards assertions added in it.
@@ -1169,24 +1147,6 @@ impl SeMiTONE {
         self.euf_theory.cancel_until(level);
         self.notified_len = self.sat_solver.trail.len();
         Some(undone)
-    }
-
-    fn compute_backtrack_level(&self, lemma: &[Lit], root_level: usize) -> usize {
-        if lemma.len() <= 1 {
-            return root_level;
-        }
-
-        let mut levels: Vec<usize> = lemma.iter().map(|lit| self.sat_solver.level(lit.var()).expect("literal should have a decision level")).collect();
-
-        levels.sort_unstable_by(|a, b| b.cmp(a));
-
-        let max_level = levels[0];
-
-        if max_level <= root_level {
-            return root_level;
-        }
-
-        if levels.iter().filter(|&&l| l == max_level).count() == 1 { levels[1].max(root_level) } else { (max_level - 1).max(root_level) }
     }
 
     /// Checks integrality of integer variables under the current rational model.
@@ -1206,14 +1166,16 @@ impl SeMiTONE {
                 let mut lemma = Vec::with_capacity(explanation_bounds.len() + 1);
                 for constraint in explanation_bounds {
                     let proxy = self.get_or_create_proxy(constraint);
-                    lemma.push(!proxy);
+                    if self.get_lit_val_and_level(proxy) != Some((true, 0)) {
+                        lemma.push(!proxy);
+                    }
                 }
                 lemma.push(cut_lit);
 
                 trace!("Generated global Gomory cut with {} dependencies!", lemma.len() - 1);
 
                 if self.sat_solver.lit_value(cut_lit) != Some(true) {
-                    let backtrack_level = if lemma.len() == 1 { 0 } else { self.sat_solver.decision_level() };
+                    let backtrack_level = if lemma.len() == 1 { self.user_scopes_len() } else { self.sat_solver.decision_level() };
                     return Err((backtrack_level, lemma));
                 }
             }
@@ -1520,5 +1482,68 @@ mod tests {
 
         let (lb_b, _) = solver.get_dl_bounds(b);
         assert!(lb_b > InfRational::from(4), "!(b - a <= 4) must imply b - a > 4, found lb(b) = {:?}", lb_b);
+    }
+
+    #[test]
+    fn test_lit_level_tracking_across_decisions() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_bool();
+        let b = solver.new_bool();
+
+        let lit_a = solver.track_expr(&a).unwrap();
+        let lit_b = solver.track_expr(&b).unwrap();
+
+        assert_eq!(solver.get_lit_val_and_level(lit_a), None);
+        assert_eq!(solver.get_lit_level(lit_b), None);
+
+        // Assignment at level 0
+        assert!(solver.assert(&a).is_ok());
+        assert!(solver.propagate().is_ok());
+        assert_eq!(solver.get_lit_val_and_level(lit_a), Some((true, 0)));
+
+        // Decision at level 1
+        assert!(solver.decide(!lit_b));
+        assert!(solver.propagate().is_ok());
+        assert_eq!(solver.get_lit_val_and_level(lit_b), Some((false, 1)));
+
+        // Backtrack to level 0
+        solver.cancel_until(0);
+        assert_eq!(solver.get_lit_val_and_level(lit_a), Some((true, 0)));
+        assert_eq!(solver.get_lit_val_and_level(lit_b), None);
+    }
+
+    #[test]
+    fn test_level_zero_pruning_avoids_proxy_allocation() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_bool();
+        let b = solver.new_bool();
+
+        let lit_a = solver.track_expr(&a).unwrap();
+        let lit_b = solver.track_expr(&b).unwrap();
+
+        // Assign `a` to true at level 0
+        assert!(solver.assert(&a).is_ok());
+        assert!(solver.propagate().is_ok());
+
+        let vars_before = solver.num_vars();
+
+        // `a ∧ b` with `a` true at level 0 should collapse to `b`
+        let and_lit = solver.track_expr(&a & &b).unwrap();
+        assert_eq!(and_lit, lit_b);
+        assert_eq!(solver.num_vars(), vars_before);
+
+        // `¬a ∧ b` with `a` true at level 0 should collapse to `Lit::FALSE`
+        let false_and_lit = solver.track_expr(!&a & b.clone()).unwrap();
+        assert_eq!(false_and_lit, Lit::FALSE);
+        assert_eq!(solver.get_lit_val_and_level(false_and_lit), Some((false, 0)));
+        assert_eq!(solver.num_vars(), vars_before);
+
+        // `a ∨ b` with `a` true at level 0 should collapse to `Lit::TRUE`
+        let or_lit = solver.track_expr(&a | &b).unwrap();
+        assert_eq!(or_lit, Lit::TRUE);
+        assert_eq!(solver.get_lit_val_and_level(or_lit), Some((true, 0)));
+        assert_eq!(solver.num_vars(), vars_before);
+
+        let _ = lit_a;
     }
 }
