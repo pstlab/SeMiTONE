@@ -499,12 +499,37 @@ mod tests {
 
         assert!(solver.smt.assert(eq_expr & bounds).is_ok(), "The system should be asserted successfully, as it has valid integer solutions.");
 
-        assert_eq!(solver.check_sat(), Some(true), "Il sistema ha una soluzione intera e deve essere SAT");
+        assert_eq!(solver.check_sat(), Some(true), "The system has an integer solution and must be SAT");
 
-        let val_x = solver.smt.get_arith_val(&x).expect("x deve avere un valore");
-        let val_y = solver.smt.get_arith_val(&y).expect("y deve avere un valore");
+        let val_x = solver.smt.get_arith_val(&x).expect("x must have a value");
+        let val_y = solver.smt.get_arith_val(&y).expect("y must have a value");
 
         assert_eq!(val_x.rational_part().clone(), Rational::Finite(rug::Rational::from(2)));
         assert_eq!(val_y.rational_part().clone(), Rational::Finite(rug::Rational::from(1)));
+    }
+
+    #[test]
+    fn test_dpllt_dl_backtracking() {
+        let mut solver = Solver::new();
+        let a = solver.smt.new_dl_var();
+        let b = solver.smt.new_dl_var();
+
+        // (b - a >= 10 ∨ b - a <= 2) ∧ (b - a <= 5) ∧ (b - a >= 0)
+        // The branch (b - a >= 10) conflicts with (b - a <= 5) in DlTheory;
+        // the solver must learn the correct lemma, backtrack, and choose (b - a <= 2).
+        let branch_bad = BoolExpr::DlGe(a, b, rug::Rational::from(10));
+        let branch_good = BoolExpr::DlLe(a, b, rug::Rational::from(2));
+        let bounds = BoolExpr::DlLe(a, b, rug::Rational::from(5)) & BoolExpr::DlGe(a, b, rug::Rational::from(0));
+
+        // We also test the explicit negation !(b - a <= 9) to cover the branch (DlLeq, true)
+        let neg_branch_bad = !BoolExpr::DlLe(a, b, rug::Rational::from(9));
+
+        assert!(solver.smt.assert((branch_bad | branch_good.clone()) & (neg_branch_bad | branch_good) & bounds).is_ok());
+        assert_eq!(solver.check_sat(), Some(true), "The solver must backtrack from the DL conflict and find the valid branch");
+
+        let val_a = solver.smt.get_dl_val(a);
+        let val_b = solver.smt.get_dl_val(b);
+        let diff = val_b - val_a;
+        assert!(diff >= InfRational::from(0) && diff <= InfRational::from(2), "Il modello estratto deve rispettare 0 <= b - a <= 2, trovato: {}", diff);
     }
 }

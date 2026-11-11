@@ -809,7 +809,7 @@ impl SeMiTONE {
                     }
                     (TheoryConstraint::EnumEq(var, val), false) => self.enum_theory.set_eq(Some(lit), *var, *val),
                     (TheoryConstraint::EnumEq(var, val), true) => self.enum_theory.set_neq(Some(lit), *var, *val),
-                    (TheoryConstraint::DlLeq(from, to, bound), false) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect()),
+                    (TheoryConstraint::DlLeq(from, to, bound), false) => self.dl_theory.assert_edge(*from, *to, bound.clone(), lit),
                     (TheoryConstraint::DlLeq(from, to, bound), true) => {
                         let rat_part = bound.rational_part().clone();
                         let neg_rat = match rat_part {
@@ -821,7 +821,7 @@ impl SeMiTONE {
                         let neg_inf = -bound.infinitesimal_part().clone() - rug::Rational::from(1);
                         let neg_bound = InfRational::new(neg_rat, neg_inf);
 
-                        self.dl_theory.assert_edge(*to, *from, neg_bound, lit).map_err(|cycle| cycle.into_iter().map(|l| !l).collect())
+                        self.dl_theory.assert_edge(*to, *from, neg_bound, lit)
                     }
                     (TheoryConstraint::EufEq(t1, t2), false) => {
                         self.euf_theory.merge(*t1, *t2, Some(lit));
@@ -1550,5 +1550,44 @@ mod tests {
         assert_eq!(solver.num_vars(), vars_before);
 
         let _ = lit_a;
+    }
+
+    #[test]
+    fn test_dl_conflict_lemma_polarities_and_backtrack() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
+
+        // Level 0 constraint: b - a <= 5
+        assert!(solver.assert(BoolExpr::DlLe(a, b, rug::Rational::from(5))).is_ok());
+        assert!(solver.propagate().is_ok());
+
+        // Simulate a resolver rho -> (b - a >= 10), incompatible with b - a <= 5
+        let rho = solver.new_lit();
+        let dl_cnstr = solver.track_expr(BoolExpr::DlGe(a, b, rug::Rational::from(10))).unwrap();
+        assert!(solver.add_clause([!rho, dl_cnstr]).is_ok());
+        assert!(solver.propagate().is_ok());
+
+        // Level 1: decide(rho)
+        assert!(solver.decide(rho));
+        let prop_res = solver.propagate();
+        assert!(prop_res.is_err(), "Activating rho must generate a conflict in Difference Logic");
+
+        let (bt_level, lemma) = prop_res.unwrap_err();
+        assert_eq!(bt_level, 0);
+
+        // Before backtracking, all literals in `lemma` must be FALSE in the current state
+        for &lit in &lemma {
+            assert_eq!(solver.get_lit_val(lit), Some(false), "Literal {} in the conflict lemma should be Some(false), but is {:?}", lit, solver.get_lit_val(lit));
+        }
+
+        // Backtrack and learn the lemma (as in backtrack_and_learn of chronoxide)
+        solver.cancel_until(bt_level);
+        assert!(solver.add_clause(lemma).is_ok());
+        assert!(solver.propagate().is_ok());
+
+        // After learning the lemma and propagating at level 0, both dl_cnstr and rho must be false!
+        assert_eq!(solver.get_lit_val_and_level(dl_cnstr), Some((false, 0)), "dl_cnstr must be forced to false at level 0");
+        assert_eq!(solver.get_lit_val_and_level(rho), Some((false, 0)), "rho must be forced to false by unit propagation");
     }
 }

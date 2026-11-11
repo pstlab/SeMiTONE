@@ -153,7 +153,8 @@ impl DlTheory {
             return Ok(false);
         }
 
-        self.distances[target_v] = new_dist;
+        self.spfa_dists.clone_from_slice(&self.distances);
+        self.spfa_dists[target_v] = new_dist;
         self.parents[target_v] = Some((source_u, literal));
 
         self.work_queue.clear();
@@ -171,10 +172,10 @@ impl DlTheory {
 
             for edge in &self.graph[curr] {
                 let next = edge.to;
-                let relaxed_dist = self.distances[curr].clone() + edge.weight.clone();
+                let relaxed_dist = self.spfa_dists[curr].clone() + edge.weight.clone();
 
-                if relaxed_dist < self.distances[next] {
-                    self.distances[next] = relaxed_dist;
+                if relaxed_dist < self.spfa_dists[next] {
+                    self.spfa_dists[next] = relaxed_dist;
                     self.parents[next] = Some((curr, edge.literal));
 
                     if !self.in_queue[next] {
@@ -185,6 +186,7 @@ impl DlTheory {
             }
         }
 
+        std::mem::swap(&mut self.distances, &mut self.spfa_dists);
         Ok(true)
     }
 
@@ -336,5 +338,36 @@ mod tests {
         assert!(dl.assert_edge(x, zero, InfRational::from(-8), Lit::new(6, false)).is_ok());
 
         assert_eq!(dl.value(x), InfRational::from(8), "The value of X must be exactly 8");
+    }
+
+    #[test]
+    fn test_failed_cycle_does_not_corrupt_distances() {
+        let mut dl = DlTheory::new();
+        let zero = dl.new_var();
+        let x = dl.new_var();
+        let y = dl.new_var();
+
+        // Level 0:
+        // 1) x - zero <= -2  (x <= -2)
+        assert!(dl.assert_edge(zero, x, InfRational::from(-2), Lit::new(1, false)).is_ok());
+        // 2) y - x <= 0      (y <= x)
+        assert!(dl.assert_edge(x, y, InfRational::from(0), Lit::new(2, false)).is_ok());
+
+        assert!(dl.value(x) <= InfRational::from(-2));
+        assert!(dl.value(y) <= dl.value(x), "At level 0, y <= x must hold");
+
+        // Level 1: add zero - x <= -5 (x >= 5), which creates a negative cycle with x <= -2
+        dl.push();
+        let conflict = dl.assert_edge(x, zero, InfRational::from(-5), Lit::new(3, false));
+        assert!(conflict.is_err(), "Should detect the negative cycle between zero and x");
+
+        // Backtrack to level 0
+        dl.cancel_until(0);
+
+        // The potential model (distances) at level 0 must not have been corrupted by the failed cycle
+        let val_x = dl.value(x);
+        let val_y = dl.value(y);
+        assert!(val_x <= InfRational::from(-2), "After cancel_until(0), x <= -2 must be preserved (found x = {})", val_x);
+        assert!(val_y <= val_x, "After cancel_until(0), the potential must not be corrupted: y <= x violated (y = {}, x = {})", val_y, val_x);
     }
 }
