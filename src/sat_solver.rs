@@ -125,37 +125,41 @@ impl SatSolver {
                         self.watches[falsified_index].push(*c_i);
                     }
                     self.prop_q.clear();
-                    if self.decision_level() <= self.floor_level() {
-                        return Err((self.floor_level(), self.clauses[clause_idx].lits.clone()));
-                    }
-                    return Err(self.analyze_conflict(clause_idx));
+                    let confl_lits = self.clauses[clause_idx].lits.clone();
+                    return Err(self.analyze_conflict(&confl_lits));
                 }
             }
         }
         Ok(())
     }
 
-    fn analyze_conflict(&mut self, mut confl: usize) -> Conflict {
+    pub(super) fn analyze_conflict(&mut self, confl_lits: &[Lit]) -> Conflict {
+        let floor = self.floor_level();
+        let conflict_level = confl_lits.iter().filter_map(|l| self.level(l.var())).max().unwrap_or(0);
+        if conflict_level <= floor {
+            return (floor, confl_lits.to_vec());
+        }
+
         let mut path_c = 0;
         let mut p_lit = None; // Option<Lit>
         let mut learnt = vec![Lit::new(0, false)];
         let mut index = self.trail.len();
+        let mut confl = 0;
 
         self.analyze_toclear.clear();
 
         loop {
-            let clause = &self.clauses[confl];
-            let start_idx = if p_lit.is_none() { 0 } else { 1 };
+            let clause_lits = if p_lit.is_none() { confl_lits } else { &self.clauses[confl].lits[1..] };
 
-            for j in start_idx..clause.lits.len() {
-                let q = clause.lits[j];
+            for &q in clause_lits {
                 let var = q.var();
+                let lvl = self.level(var).unwrap_or(0);
 
-                if !self.seen[var] && self.level(var).unwrap_or(0) > 0 {
+                if !self.seen[var] && lvl > 0 {
                     self.seen[var] = true;
                     self.analyze_toclear.push(var);
 
-                    if self.level(var).unwrap_or(0) >= self.decision_level() {
+                    if lvl >= conflict_level {
                         path_c += 1;
                     } else {
                         learnt.push(q);
@@ -228,9 +232,8 @@ impl SatSolver {
             self.seen[var] = false;
         }
 
-        (bt_level, learnt)
+        (bt_level.max(floor), learnt)
     }
-
     fn enqueue(&mut self, lit: Lit, reason: Option<usize>) -> bool {
         trace!("Enqueue {}{}", lit, reason.map_or("".to_string(), |r| format!(" (reason: {})", r)));
         match self.lit_value(lit) {
@@ -299,7 +302,7 @@ impl SatSolver {
                 let second = simplified_lits[1];
 
                 if self.lit_value(first) == Some(false) {
-                    return Err((self.conflict_bt_level(&simplified_lits), simplified_lits));
+                    return Err(self.analyze_conflict(&simplified_lits));
                 }
 
                 let is_unit = self.lit_value(first).is_none() && self.lit_value(second) == Some(false);
@@ -325,21 +328,6 @@ impl SatSolver {
             }
         }
         Ok(())
-    }
-
-    /// Level to backtrack to so that the (falsified) `clause` becomes asserting; never below `floor`.
-    pub(super) fn conflict_bt_level(&self, clause: &[Lit]) -> usize {
-        let floor = self.floor_level();
-        if clause.len() <= 1 {
-            return floor;
-        }
-        let mut levels: Vec<usize> = clause.iter().map(|l| self.level(l.var()).unwrap_or(0)).collect();
-        levels.sort_unstable_by(|a, b| b.cmp(a));
-        let max = levels[0];
-        if max <= floor {
-            return floor;
-        }
-        if levels[1] < max { levels[1].max(floor) } else { (max - 1).max(floor) }
     }
 
     #[inline]

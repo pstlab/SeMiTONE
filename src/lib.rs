@@ -835,14 +835,14 @@ impl SeMiTONE {
                 };
 
                 if let Err(lemma) = theory_result {
-                    return Err((self.sat_solver.conflict_bt_level(&lemma), lemma));
+                    return Err(self.sat_solver.analyze_conflict(&lemma));
                 }
             }
             self.notified_len += 1;
         }
 
         if let Err(conflict) = self.lra_theory.check() {
-            return Err((self.sat_solver.conflict_bt_level(&conflict), conflict));
+            return Err(self.sat_solver.analyze_conflict(&conflict));
         }
         Ok(())
     }
@@ -1589,5 +1589,48 @@ mod tests {
         // After learning the lemma and propagating at level 0, both dl_cnstr and rho must be false!
         assert_eq!(solver.get_lit_val_and_level(dl_cnstr), Some((false, 0)), "dl_cnstr must be forced to false at level 0");
         assert_eq!(solver.get_lit_val_and_level(rho), Some((false, 0)), "rho must be forced to false by unit propagation");
+    }
+
+    #[test]
+    fn test_theory_conflict_reduces_to_1uip_directly() {
+        let mut solver = SeMiTONE::new();
+        let a = solver.new_dl_var();
+        let b = solver.new_dl_var();
+        let c = solver.new_dl_var();
+
+        // Level 1: decide r1, which imposes c - a <= 5
+        let r1 = solver.new_lit();
+        let c_ac = solver.track_expr(BoolExpr::DlLe(a, c, rug::Rational::from(5))).unwrap();
+        assert!(solver.add_clause([!r1, c_ac]).is_ok());
+        assert!(solver.decide(r1));
+        assert!(solver.propagate().is_ok());
+
+        // Level 2: unrelated decision (to verify the non-chronological jump from 3 to 1)
+        let dummy = solver.new_lit();
+        assert!(solver.decide(dummy));
+        assert!(solver.propagate().is_ok());
+
+        // Level 3: decide r2, which propagates TWO DL constraints:
+        // b - a >= 4 (a - b <= -4) AND c - b >= 4 (b - c <= -4)
+        // Together with c - a <= 5 (from level 1), they form a negative cycle (5 - 4 - 4 = -3 < 0)
+        // with TWO literals at level 3.
+        let r2 = solver.new_lit();
+        let c_ab = solver.track_expr(BoolExpr::DlGe(a, b, rug::Rational::from(4))).unwrap();
+        let c_bc = solver.track_expr(BoolExpr::DlGe(b, c, rug::Rational::from(4))).unwrap();
+        assert!(solver.add_clause([!r2, c_ab]).is_ok());
+        assert!(solver.add_clause([!r2, c_bc]).is_ok());
+
+        assert!(solver.decide(r2));
+        let err = solver.propagate().expect_err("The DL cycle must cause a conflict at level 3");
+
+        let (bt_level, lemma) = err;
+        // Thanks to analyze_conflict (1-UIP), c_ab and c_bc resolve to !r2,
+        // so bt_level must be 1 (the level of r1/c_ac), NOT 2 (3 - 1)!
+        assert_eq!(bt_level, 1, "The conflict must jump directly to level 1 via 1-UIP");
+        assert_eq!(lemma[0], !r2, "The first literal in the lemma must be the 1-UIP !r2");
+
+        solver.cancel_until(bt_level);
+        assert!(solver.add_clause(lemma).is_ok());
+        assert_eq!(solver.get_lit_val_and_level(r2), Some((false, 1)), "!r2 must be propagated immediately at level 1");
     }
 }
