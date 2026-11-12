@@ -330,27 +330,32 @@ impl SatSolver {
         Ok(())
     }
 
+    /// Returns the assigned value of a variable, if any.
     #[inline]
     pub(super) fn value(&self, var: usize) -> Option<bool> {
         self.assigns.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
     }
 
+    /// Returns the assigned value of a literal, if any.
     #[inline]
     pub(super) fn lit_value(&self, lit: Lit) -> Option<bool> {
         let val = self.value(lit.var());
         if lit.sign() { val.map(|v| !v) } else { val }
     }
 
+    /// Returns the decision level at which a variable was assigned, if any.
     #[inline]
     pub(super) fn level(&self, var: usize) -> Option<usize> {
         self.level.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
     }
 
+    /// Returns the decision level at which a literal was assigned, if any.
     #[inline]
     pub(super) fn lit_level(&self, lit: Lit) -> Option<usize> {
         self.level(lit.var())
     }
 
+    /// Returns the assigned value and decision level of a literal in the current trail, if assigned.
     #[inline]
     pub(super) fn lit_value_and_level(&self, lit: Lit) -> Option<(bool, usize)> {
         let val = self.lit_value(lit)?;
@@ -358,10 +363,18 @@ impl SatSolver {
         Some((val, lvl))
     }
 
+    /// Returns the antecedent literals that caused the assignment of `lit`, if any.
+    pub(super) fn lit_antecedents(&self, lit: Lit) -> Option<&[Lit]> {
+        let clause_idx = self.reason[lit.var()]?;
+        Some(&self.clauses[clause_idx].lits[1..])
+    }
+
+    /// Returns the current decision level of the solver.
     pub(super) fn decision_level(&self) -> usize {
         self.trail_lim.len()
     }
 
+    /// Cancels assignments until the specified decision level, returning the retracted literals.
     pub(super) fn cancel_until(&mut self, level: usize) -> Vec<Lit> {
         trace!("Canceling until level {}", level);
         let mut retracted = Vec::new();

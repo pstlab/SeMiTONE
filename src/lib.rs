@@ -859,6 +859,12 @@ impl SeMiTONE {
         self.sat_solver.lit_value(lit)
     }
 
+    /// Returns the antecedent literals that caused the assignment of `lit`, if any.
+    #[inline]
+    pub fn get_lit_antecedents(&self, lit: Lit) -> Option<&[Lit]> {
+        self.sat_solver.lit_antecedents(lit)
+    }
+
     /// Returns the assigned value and decision level of a literal in the current trail.
     #[inline]
     pub fn get_lit_val_and_level(&self, lit: Lit) -> Option<(bool, usize)> {
