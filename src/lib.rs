@@ -847,6 +847,52 @@ impl SeMiTONE {
         Ok(())
     }
 
+    /// Probes the current branch with a set of assumptions.
+    ///
+    /// Returns `Ok(true)` if the assumptions are consistent with the current branch,
+    /// `Ok(false)` if they are inconsistent, or `Err((backtrack_level, lemma))` if a conflict is found during propagation.
+    pub fn probe(&mut self, assumptions: &[Lit]) -> Result<bool, (usize, Vec<Lit>)> {
+        let init_level = self.decision_level();
+        'probe_loop: loop {
+            if let Err((bt_level, lemma)) = self.propagate() {
+                if self.decision_level() == 0 || bt_level < init_level {
+                    return Err((bt_level, lemma));
+                }
+                self.cancel_until(bt_level);
+                let mut cur_lemma = lemma;
+                while let Err((next_bt, next_lemma)) = self.add_clause(cur_lemma) {
+                    if self.decision_level() == 0 || next_bt < init_level {
+                        return Err((next_bt, next_lemma));
+                    }
+                    self.cancel_until(next_bt);
+                    cur_lemma = next_lemma;
+                }
+                continue 'probe_loop;
+            }
+
+            for &lit in assumptions {
+                match self.get_lit_val(lit) {
+                    Some(true) => continue,
+                    Some(false) => {
+                        if self.decision_level() > init_level {
+                            self.cancel_until(init_level);
+                        }
+                        return Ok(false);
+                    }
+                    None => {
+                        self.decide(lit);
+                        continue 'probe_loop;
+                    }
+                }
+            }
+
+            if self.decision_level() > init_level {
+                self.cancel_until(init_level);
+            }
+            return Ok(true);
+        }
+    }
+
     /// Returns the decision level at which the literal was assigned, if any.
     #[inline]
     pub fn get_lit_level(&self, lit: Lit) -> Option<usize> {
