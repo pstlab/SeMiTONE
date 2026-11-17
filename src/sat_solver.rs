@@ -76,6 +76,10 @@ impl SatSolver {
         idx
     }
 
+    pub fn vars(&self) -> impl ExactSizeIterator<Item = BoolVar> {
+        (0..self.assigns.len()).map(BoolVar)
+    }
+
     pub(super) fn num_vars(&self) -> usize {
         self.assigns.len()
     }

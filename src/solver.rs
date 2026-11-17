@@ -1,4 +1,7 @@
-use crate::{SeMiTONE, sat_solver::Lit};
+use crate::{
+    SeMiTONE,
+    sat_solver::{BoolVar, Lit},
+};
 
 pub struct Solver {
     pub smt: SeMiTONE,
@@ -13,11 +16,11 @@ impl Default for Solver {
 
 impl Solver {
     pub fn new() -> Self {
-        Self { smt: SeMiTONE::new(), heuristic: BranchingHeuristics::new(0, 0.95, true) }
+        Self { smt: SeMiTONE::new(), heuristic: BranchingHeuristics::new(0.95, true) }
     }
 
     pub fn check_sat(&mut self) -> Option<bool> {
-        self.heuristic.sync_with_solver(self.smt.num_vars());
+        self.heuristic.sync_with_solver(&self.smt.sat_solver);
         loop {
             if let Err((bt_level, lemma)) = self.smt.propagate() {
                 for lit in self.smt.cancel_until(bt_level) {
@@ -40,7 +43,7 @@ impl Solver {
             if let Some((var, polarity)) = self.heuristic.pick_branching_literal(|var| self.smt.get_lit_val(Lit::new(var, false)).is_none()) {
                 self.smt.decide(Lit::new(var, polarity));
             } else if let Err((bt_level, lemma)) = self.smt.check_ints() {
-                self.heuristic.sync_with_solver(self.smt.num_vars());
+                self.heuristic.sync_with_solver(&self.smt.sat_solver);
                 for lit in self.smt.cancel_until(bt_level) {
                     self.heuristic.save_phase(lit.var(), lit.sign());
                     self.heuristic.insert_unassigned(lit.var());
@@ -82,7 +85,7 @@ struct BranchingHeuristics {
     inc: f64,
     decay_factor: f64,
 
-    heap: Vec<usize>,
+    heap: Vec<BoolVar>,
     indices: Vec<usize>,
 
     phases: Vec<bool>,
@@ -90,36 +93,30 @@ struct BranchingHeuristics {
 }
 
 impl BranchingHeuristics {
-    fn new(num_vars: usize, decay_factor: f64, default_phase: bool) -> Self {
-        let mut slf = Self {
-            activities: vec![0.0; num_vars],
+    fn new(decay_factor: f64, default_phase: bool) -> Self {
+        Self {
+            activities: Vec::new(),
             inc: 1.0,
             decay_factor,
-            heap: Vec::with_capacity(num_vars),
-            indices: vec![usize::MAX; num_vars],
-            phases: vec![default_phase; num_vars],
+            heap: Vec::new(),
+            indices: Vec::new(),
+            phases: Vec::new(),
             default_phase,
-        };
-
-        for i in 0..num_vars {
-            slf.heap.push(i);
-            slf.indices[i] = i;
         }
-
-        slf
     }
 
-    fn sync_with_solver(&mut self, current_num_vars: usize) {
+    fn sync_with_solver(&mut self, sat_solver: &crate::sat_solver::SatSolver) {
         let known_vars = self.activities.len();
-        for var in known_vars..current_num_vars {
-            self.ensure_capacity(var);
+        let current_num_vars = sat_solver.num_vars();
+        self.activities.resize(current_num_vars, 0.0);
+        self.indices.resize(current_num_vars, usize::MAX);
+        self.phases.resize(current_num_vars, self.default_phase);
+        for var in sat_solver.vars().skip(known_vars) {
             self.insert_unassigned(var);
         }
     }
 
-    fn bump_activity(&mut self, var: usize) {
-        self.ensure_capacity(var);
-
+    fn bump_activity(&mut self, var: BoolVar) {
         self.activities[var] += self.inc;
 
         if self.indices[var] != usize::MAX {
@@ -135,12 +132,11 @@ impl BranchingHeuristics {
         self.inc /= self.decay_factor;
     }
 
-    fn save_phase(&mut self, var: usize, polarity: bool) {
-        self.ensure_capacity(var);
+    fn save_phase(&mut self, var: BoolVar, polarity: bool) {
         self.phases[var] = polarity;
     }
 
-    fn insert_unassigned(&mut self, var: usize) {
+    fn insert_unassigned(&mut self, var: BoolVar) {
         if self.indices[var] == usize::MAX {
             let idx = self.heap.len();
             self.indices[var] = idx;
@@ -149,9 +145,9 @@ impl BranchingHeuristics {
         }
     }
 
-    fn pick_branching_literal<F>(&mut self, is_unassigned: F) -> Option<(usize, bool)>
+    fn pick_branching_literal<F>(&mut self, is_unassigned: F) -> Option<(BoolVar, bool)>
     where
-        F: Fn(usize) -> bool,
+        F: Fn(BoolVar) -> bool,
     {
         while !self.heap.is_empty() {
             let max_var = self.heap[0];
@@ -170,15 +166,6 @@ impl BranchingHeuristics {
             }
         }
         None
-    }
-
-    fn ensure_capacity(&mut self, var: usize) {
-        if var >= self.activities.len() {
-            let new_len = var + 1;
-            self.activities.resize(new_len, 0.0);
-            self.indices.resize(new_len, usize::MAX);
-            self.phases.resize(new_len, self.default_phase);
-        }
     }
 
     fn rescale_activities(&mut self) {
@@ -249,6 +236,35 @@ mod tests {
         ast::{ArithExpr, BoolExpr, min},
         rational::{InfRational, Rational},
     };
+
+    #[test]
+    fn test_heuristic_sync_adds_only_new_variables() {
+        let mut sat = crate::sat_solver::SatSolver::new();
+        let first = sat.mk_var();
+        let mut heuristic = BranchingHeuristics::new(0.95, true);
+
+        heuristic.sync_with_solver(&sat);
+        assert!(heuristic.heap.contains(&first));
+        let removed = heuristic.pick_branching_literal(|_| true).unwrap().0;
+
+        let second = sat.mk_var();
+        heuristic.sync_with_solver(&sat);
+        heuristic.sync_with_solver(&sat);
+        assert!(!heuristic.heap.contains(&removed));
+        assert_eq!(heuristic.heap.iter().filter(|&&var| var == second).count(), 1);
+    }
+
+    #[test]
+    fn test_search_assigns_variables_added_between_checks() {
+        let mut solver = Solver::new();
+        let first = solver.smt.new_lit();
+        assert_eq!(solver.check_sat(), Some(true));
+        assert!(solver.smt.get_lit_val(first).is_some());
+
+        let second = solver.smt.new_lit();
+        assert_eq!(solver.check_sat(), Some(true));
+        assert!(solver.smt.get_lit_val(second).is_some());
+    }
 
     #[test]
     fn test_simplex_system_sat() {

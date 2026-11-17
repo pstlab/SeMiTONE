@@ -397,9 +397,7 @@ impl SeMiTONE {
                     return Ok(Lit::TRUE);
                 }
 
-                let domain1 = self.enum_theory.initial_domain(*v1);
-                let domain2 = self.enum_theory.initial_domain(*v2);
-                let common: Vec<usize> = domain1.intersection(&domain2).copied().collect();
+                let common: Vec<usize> = self.enum_theory.initial_domain(*v1).intersection(self.enum_theory.initial_domain(*v2)).copied().collect();
 
                 if common.is_empty() {
                     return Ok(Lit::FALSE);
