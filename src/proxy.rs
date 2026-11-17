@@ -1,6 +1,5 @@
 use crate::{dl_theory::DlVar, enum_theory::EnumVar, euf_theory::EufNode, lra_theory::ArithVar, rational::InfRational, sat_solver::BoolVar};
 use rustc_hash::FxHashMap;
-use std::collections::HashMap;
 
 pub struct ProxyRegistry {
     pub proxy_to_constraint: FxHashMap<BoolVar, TheoryConstraint>,
@@ -9,7 +8,7 @@ pub struct ProxyRegistry {
 
 impl ProxyRegistry {
     pub fn new() -> Self {
-        Self { proxy_to_constraint: HashMap::default(), constraint_to_proxy: HashMap::default() }
+        Self { proxy_to_constraint: FxHashMap::default(), constraint_to_proxy: FxHashMap::default() }
     }
 
     pub fn get_proxy(&self, constraint: &TheoryConstraint) -> Option<BoolVar> {

@@ -1,7 +1,6 @@
 use crate::Lit;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::{
-    collections::HashSet,
     fmt,
     ops::{Index, IndexMut},
 };
@@ -52,7 +51,7 @@ struct Signature {
 #[derive(Clone)]
 enum EufUndoOp {
     Merged { child: EufNode, old_size: usize, parent: EufNode },
-    AppendedUseList { parent: EufNode, count: usize },
+    AppendedUseList { parent: EufNode, child: EufNode, count: usize },
     ProofRerooted { changes: Vec<(EufNode, Option<ProofEdge>)> },
     SigInserted { sig: Signature },
     SigRemoved { sig: Signature, term: EufNode },
@@ -182,7 +181,7 @@ impl EufTheory {
 
         let (parent, child) = if self.sizes[root1] >= self.sizes[root2] { (root1, root2) } else { (root2, root1) };
 
-        let child_uses = self.use_list[child].clone();
+        let child_uses = std::mem::take(&mut self.use_list[child]);
 
         for &u in &child_uses {
             if let Some(old_sig) = self.signature(u) {
@@ -218,7 +217,7 @@ impl EufTheory {
 
         let count = child_uses.len();
         self.use_list[parent].extend(child_uses);
-        self.undo_trail.push(EufUndoOp::AppendedUseList { parent, count });
+        self.undo_trail.push(EufUndoOp::AppendedUseList { parent, child, count });
 
         true
     }
@@ -295,9 +294,9 @@ impl EufTheory {
                     self.parents[child] = child;
                     self.sizes[parent] = old_size;
                 }
-                EufUndoOp::AppendedUseList { parent, count } => {
+                EufUndoOp::AppendedUseList { parent, child, count } => {
                     let new_len = self.use_list[parent].len() - count;
-                    self.use_list[parent].truncate(new_len);
+                    self.use_list[child] = self.use_list[parent].split_off(new_len);
                 }
                 EufUndoOp::ProofRerooted { changes } => {
                     for (node, old_edge) in changes.into_iter().rev() {
@@ -343,16 +342,15 @@ impl EufTheory {
 
     pub(super) fn explain(&self, t1: EufNode, t2: EufNode, explanation: &mut Vec<Lit>) {
         let mut queue = vec![(t1, t2)];
-        // A proof edge is identified by its source node (edges are always crossed upwards),
-        // so every edge, and hence every reason literal, is emitted at most once.
-        let mut done: HashSet<EufNode> = HashSet::new();
+        let mut done = FxHashSet::default();
+        let mut ancestors = FxHashSet::default();
 
         while let Some((a, b)) = queue.pop() {
             if a == b {
                 continue;
             }
             debug_assert_eq!(self.find(a), self.find(b), "Cannot explain nodes that are not equal");
-            let lca = self.lca(a, b);
+            let lca = self.lca(a, b, &mut ancestors);
 
             for start in [a, b] {
                 let mut curr = start;
@@ -375,8 +373,8 @@ impl EufTheory {
         }
     }
 
-    fn lca(&self, a: EufNode, b: EufNode) -> EufNode {
-        let mut ancestors = HashSet::new();
+    fn lca(&self, a: EufNode, b: EufNode, ancestors: &mut FxHashSet<EufNode>) -> EufNode {
+        ancestors.clear();
         let mut curr = a;
         ancestors.insert(curr);
         while let Some(edge) = &self.proof_tree[curr] {

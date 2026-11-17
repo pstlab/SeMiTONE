@@ -34,7 +34,7 @@ pub struct SmtParser<'a> {
     custom_sorts: FxHashSet<String>,
     var_sorts: FxHashMap<String, String>,
     purified_bool_vars: Vec<(EufExpr, BoolExpr)>,
-    purified_arith_vars: Vec<(EufExpr, ArithExpr, String)>,
+    purified_arith_vars: Vec<(EufExpr, ArithExpr)>,
     is_unsat: bool,
     unsat_scopes: Vec<bool>,
     last_check_sat: Option<bool>,
@@ -563,27 +563,23 @@ impl<'a> SmtParser<'a> {
                             }
                             Expr::Arith(arith_expr) => {
                                 let fresh_euf_expr = self.solver.smt.new_euf_var();
-                                let sort_type = self.infer_arith_sort(arg).to_owned();
-                                let fresh_arith_expr = if sort_type == "Int" { self.solver.smt.new_int() } else { self.solver.smt.new_real() };
+                                let fresh_arith_expr = self.solver.smt.new_real();
 
                                 let bridge_eq = fresh_arith_expr.eq(&arith_expr);
                                 if self.solver.smt.assert(&bridge_eq).is_err() {
                                     self.is_unsat = true;
                                 }
 
-                                for (old_euf, old_arith, old_sort) in &self.purified_arith_vars {
-                                    if old_sort == &sort_type {
-                                        let euf_eq = fresh_euf_expr.eq(old_euf.clone());
-                                        let arith_eq = fresh_arith_expr.eq(old_arith);
-                                        let iff_expr = euf_eq.eq(&arith_eq);
-                                        if self.solver.smt.assert(&iff_expr).is_err() {
-                                            self.is_unsat = true;
-                                        }
+                                for (old_euf, old_arith) in &self.purified_arith_vars {
+                                    let euf_eq = fresh_euf_expr.eq(old_euf.clone());
+                                    let arith_eq = fresh_arith_expr.eq(old_arith);
+                                    let iff_expr = euf_eq.eq(&arith_eq);
+                                    if self.solver.smt.assert(&iff_expr).is_err() {
+                                        self.is_unsat = true;
                                     }
                                 }
 
-                                self.purified_arith_vars.push((fresh_euf_expr.clone(), fresh_arith_expr, sort_type.to_string()));
-
+                                self.purified_arith_vars.push((fresh_euf_expr.clone(), fresh_arith_expr));
                                 parsed_args.push(Expr::Euf(fresh_euf_expr));
                             }
                             Expr::Bool(bool_expr) => {
@@ -674,28 +670,6 @@ impl<'a> SmtParser<'a> {
                 self.euf_funcs.contains_key(func_name)
             }
             _ => false,
-        }
-    }
-
-    fn infer_arith_sort(&self, term: &concrete::Term) -> &str {
-        match term {
-            concrete::Term::Constant(c) => match c {
-                concrete::Constant::Numeral(_) => "Int",
-                concrete::Constant::Decimal(_) => "Real",
-                _ => panic!("Unsupported constant type for sort inference"),
-            },
-            concrete::Term::QualIdentifier(id) => {
-                let name = Self::symbol_of_qual_identifier(id);
-                self.var_sorts.get(name).map(|s| s.as_str()).unwrap_or_else(|| panic!("Undeclared variable for sort inference: {}", name))
-            }
-            concrete::Term::Application { arguments, .. } => {
-                if let Some(first_arg) = arguments.first() {
-                    self.infer_arith_sort(first_arg)
-                } else {
-                    panic!("Cannot infer sort from empty application")
-                }
-            }
-            _ => panic!("Unsupported term structure for sort inference"),
         }
     }
 }

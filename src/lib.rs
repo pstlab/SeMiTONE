@@ -117,11 +117,7 @@ impl SeMiTONE {
         let mut internal_args = Vec::with_capacity(args.len());
         for arg in &args {
             if let Expr::Euf(euf_arg) = arg {
-                let node_id = match euf_arg {
-                    EufExpr::Var(node) => *node,
-                    EufExpr::App(node, _, _) => *node,
-                };
-                internal_args.push(node_id);
+                internal_args.push(euf_arg.node());
             } else {
                 panic!("EUF application arguments must be EUF expressions, but got: {:?}", arg);
             }
@@ -361,22 +357,12 @@ impl SeMiTONE {
             }
             (Expr::Enum(e1), Expr::Enum(e2)) => self.mk_enum_eq(e1, e2),
             (Expr::Euf(u1), Expr::Euf(u2)) => {
-                let id1 = match u1 {
-                    crate::ast::EufExpr::Var(n) => n,
-                    crate::ast::EufExpr::App(n, _, _) => n,
-                };
-                let id2 = match u2 {
-                    crate::ast::EufExpr::Var(n) => n,
-                    crate::ast::EufExpr::App(n, _, _) => n,
-                };
-
+                let (id1, id2) = (u1.node(), u2.node());
                 if id1 == id2 {
                     return Ok(Lit::TRUE);
                 }
-
                 let (min_id, max_id) = if id1 < id2 { (id1, id2) } else { (id2, id1) };
-
-                Ok(self.get_or_create_proxy(TheoryConstraint::EufEq(*min_id, *max_id)))
+                Ok(self.get_or_create_proxy(TheoryConstraint::EufEq(min_id, max_id)))
             }
             _ => panic!("Type mismatch in Eq: cannot compare different domains.\nLeft: {:?}\nRight: {:?}", expr1, expr2),
         }
@@ -921,8 +907,8 @@ impl SeMiTONE {
     }
 
     /// Returns the assigned value of a Boolean expression when it is fully determined.
-    pub fn get_bool_val(&self, expr: &BoolExpr) -> Option<bool> {
-        match expr {
+    pub fn get_bool_val(&self, expr: impl AsRef<BoolExpr>) -> Option<bool> {
+        match expr.as_ref() {
             BoolExpr::True => Some(true),
             BoolExpr::False => Some(false),
             BoolExpr::Var(v) => self.sat_solver.value(*v),
@@ -1110,14 +1096,15 @@ impl SeMiTONE {
                         _ => None,
                     }
                 }
+                (Expr::Euf(u1), Expr::Euf(u2)) => (self.euf_theory.find(u1.node()) == self.euf_theory.find(u2.node())).then_some(true),
                 _ => None,
             },
         }
     }
 
     /// Returns the current value of an arithmetic expression when it is fixed by the model.
-    pub fn get_arith_val(&self, expr: &ArithExpr) -> Option<InfRational> {
-        match expr {
+    pub fn get_arith_val(&self, expr: impl AsRef<ArithExpr>) -> Option<InfRational> {
+        match expr.as_ref() {
             ArithExpr::Const(c) => Some(InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0))),
             ArithExpr::IntVar(v) => Some(self.lra_theory.value(*v).clone()),
             ArithExpr::RealVar(v) => Some(self.lra_theory.value(*v).clone()),
@@ -1134,8 +1121,8 @@ impl SeMiTONE {
     }
 
     /// Returns the current lower and upper bounds of an arithmetic expression when they are fixed by the model.
-    pub fn get_arith_bounds(&self, expr: &ArithExpr) -> Option<(InfRational, InfRational)> {
-        match expr {
+    pub fn get_arith_bounds(&self, expr: impl AsRef<ArithExpr>) -> Option<(InfRational, InfRational)> {
+        match expr.as_ref() {
             ArithExpr::Const(c) => {
                 let val = InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0));
                 Some((val.clone(), val))

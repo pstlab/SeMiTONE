@@ -428,6 +428,12 @@ impl ops::Neg for &ArithExpr {
     }
 }
 
+impl AsRef<ArithExpr> for ArithExpr {
+    fn as_ref(&self) -> &ArithExpr {
+        self
+    }
+}
+
 impl fmt::Display for ArithExpr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -464,8 +470,20 @@ pub enum EufExpr {
 }
 
 impl EufExpr {
+    pub fn node(&self) -> EufNode {
+        match self {
+            EufExpr::Var(n) | EufExpr::App(n, _, _) => *n,
+        }
+    }
+
     pub fn eq(&self, other: impl Into<EufExpr>) -> BoolExpr {
         BoolExpr::Eq(Box::new(Expr::Euf(self.clone())), Box::new(Expr::Euf(other.into())))
+    }
+}
+
+impl AsRef<EufExpr> for EufExpr {
+    fn as_ref(&self) -> &EufExpr {
+        self
     }
 }
 
