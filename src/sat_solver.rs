@@ -66,7 +66,7 @@ impl SatSolver {
 
     pub(super) fn mk_var(&mut self) -> BoolVar {
         let idx = BoolVar(self.assigns.len());
-        trace!("Creating new variable b{}", idx);
+        trace!("Creating new variable {}", idx);
         self.assigns.push(None);
         self.watches.push(Vec::new());
         self.watches.push(Vec::new()); // For the negated literal
@@ -508,7 +508,7 @@ impl ops::Not for Lit {
 
 impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.sign() { write!(f, "¬b{}", self.var()) } else { write!(f, "b{}", self.var()) }
+        if self.sign() { write!(f, "¬{}", self.var()) } else { write!(f, "{}", self.var()) }
     }
 }
 
