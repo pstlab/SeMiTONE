@@ -2,11 +2,37 @@ use crate::{
     Lit,
     rational::{InfRational, Rational},
 };
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    fmt,
+    ops::{Index, IndexMut},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DlVar(usize);
+
+impl<T> Index<DlVar> for Vec<T> {
+    type Output = T;
+    fn index(&self, var: DlVar) -> &Self::Output {
+        &self[var.0]
+    }
+}
+
+impl<T> IndexMut<DlVar> for Vec<T> {
+    fn index_mut(&mut self, var: DlVar) -> &mut Self::Output {
+        &mut self[var.0]
+    }
+}
+
+impl fmt::Display for DlVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "d{}", self.0)
+    }
+}
 
 #[derive(Clone, Debug)]
 struct DlEdge {
-    to: usize,
+    to: DlVar,
     weight: InfRational,
     literal: Lit,
 }
@@ -15,13 +41,13 @@ pub(super) struct DlTheory {
     graph: Vec<Vec<DlEdge>>,
     rev_graph: Vec<Vec<DlEdge>>,
 
-    history: Vec<(usize, usize)>,
+    history: Vec<(DlVar, DlVar)>,
     trail_lim: Vec<usize>,
 
     distances: Vec<InfRational>,
-    parents: Vec<Option<(usize, Lit)>>,
+    parents: Vec<Option<(DlVar, Lit)>>,
 
-    work_queue: VecDeque<usize>,
+    work_queue: VecDeque<DlVar>,
     in_queue: Vec<bool>,
 
     spfa_dists: Vec<InfRational>,
@@ -42,8 +68,8 @@ impl DlTheory {
         }
     }
 
-    pub(super) fn new_var(&mut self) -> usize {
-        let id = self.graph.len();
+    pub(super) fn new_var(&mut self) -> DlVar {
+        let id = DlVar(self.graph.len());
 
         self.graph.push(Vec::new());
         self.rev_graph.push(Vec::new());
@@ -58,38 +84,38 @@ impl DlTheory {
         id
     }
 
-    pub(super) fn value(&self, var: usize) -> InfRational {
+    pub(super) fn value(&self, var: DlVar) -> InfRational {
         self.distances[var].clone() - self.distances[0].clone()
     }
 
     #[allow(dead_code)]
     pub(super) fn lbs(&self) -> Vec<InfRational> {
-        let dists_to_zero = self.exact_distances_from(0, true);
+        let dists_to_zero = self.exact_distances_from(DlVar(0), true);
         dists_to_zero.into_iter().map(|d| -d).collect()
     }
 
-    pub(super) fn lb(&self, var: usize) -> InfRational {
+    pub(super) fn lb(&self, var: DlVar) -> InfRational {
         let dists = self.exact_distances_from(var, false);
         -dists[0].clone()
     }
 
     #[allow(dead_code)]
     pub(super) fn ubs(&self) -> Vec<InfRational> {
-        self.exact_distances_from(0, false)
+        self.exact_distances_from(DlVar(0), false)
     }
 
-    pub(super) fn ub(&self, var: usize) -> InfRational {
-        let dists = self.exact_distances_from(0, false);
+    pub(super) fn ub(&self, var: DlVar) -> InfRational {
+        let dists = self.exact_distances_from(DlVar(0), false);
         dists[var].clone()
     }
 
     #[allow(dead_code)]
-    pub(super) fn exact_distance(&self, from: usize, to: usize) -> InfRational {
+    pub(super) fn exact_distance(&self, from: DlVar, to: DlVar) -> InfRational {
         let dists = self.exact_distances_from(from, false);
         dists[to].clone()
     }
 
-    fn exact_distances_from(&self, source: usize, use_rev_graph: bool) -> Vec<InfRational> {
+    fn exact_distances_from(&self, source: DlVar, use_rev_graph: bool) -> Vec<InfRational> {
         let n = self.graph.len();
         let mut dists = vec![InfRational::from(Rational::PositiveInf); n];
         let mut in_queue = vec![false; n];
@@ -137,7 +163,7 @@ impl DlTheory {
         }
     }
 
-    pub(super) fn assert_edge(&mut self, from: usize, to: usize, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
+    pub(super) fn assert_edge(&mut self, from: DlVar, to: DlVar, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
         self.graph[from].push(DlEdge { to, weight: weight.clone(), literal });
         self.rev_graph[to].push(DlEdge { to: from, weight: weight.clone(), literal });
 
@@ -146,7 +172,7 @@ impl DlTheory {
         self.check_negative_cycle(from, to, weight, literal)
     }
 
-    fn check_negative_cycle(&mut self, source_u: usize, target_v: usize, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
+    fn check_negative_cycle(&mut self, source_u: DlVar, target_v: DlVar, weight: InfRational, literal: Lit) -> Result<bool, Vec<Lit>> {
         let new_dist = self.distances[source_u].clone() + weight;
 
         if new_dist >= self.distances[target_v] {
@@ -190,7 +216,7 @@ impl DlTheory {
         Ok(true)
     }
 
-    fn extract_nogood(&self, conflict_node: usize) -> Vec<Lit> {
+    fn extract_nogood(&self, conflict_node: DlVar) -> Vec<Lit> {
         let mut nogood = Vec::new();
         let mut curr = conflict_node;
 
@@ -219,8 +245,8 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert_eq!(zero, 0, "First variable should have ID 0");
-        assert_eq!(x, 1);
+        assert_eq!(zero, DlVar(0), "First variable should have ID 0");
+        assert_eq!(x, DlVar(1));
         assert_eq!(dl.graph.len(), 2);
         assert_eq!(dl.distances.len(), 2);
     }

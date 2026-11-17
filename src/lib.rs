@@ -24,8 +24,8 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId},
-    dl_theory::DlTheory,
+    ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, EufNode, Expr, FuncId},
+    dl_theory::{DlTheory, DlVar},
     enum_theory::EnumTheory,
     euf_theory::EufTheory,
     lra_theory::{ArithVar, LraTheory, SparseRow, tighten_int_bound},
@@ -99,7 +99,7 @@ impl SeMiTONE {
 
     /// Allocates a new difference logic variable.
     pub fn new_dl_var(&mut self) -> DlVar {
-        DlVar(self.dl_theory.new_var())
+        self.dl_theory.new_var()
     }
 
     /// Allocates a new EUF variable.
@@ -233,10 +233,10 @@ impl SeMiTONE {
                 BoolExpr::Le(a1, a2) => Ok(self.mk_ge(a1, a2, true)),
                 BoolExpr::Ge(a1, a2) => Ok(self.mk_le(a1, a2, true)),
                 BoolExpr::Gt(a1, a2) => Ok(self.mk_le(a1, a2, false)),
-                BoolExpr::DlLt(f, t, b) => Ok(self.mk_dl_ge(f.0, t.0, b.clone(), false)),
-                BoolExpr::DlLe(f, t, b) => Ok(self.mk_dl_ge(f.0, t.0, b.clone(), true)),
-                BoolExpr::DlGe(f, t, b) => Ok(self.mk_dl_le(f.0, t.0, b.clone(), true)),
-                BoolExpr::DlGt(f, t, b) => Ok(self.mk_dl_le(f.0, t.0, b.clone(), false)),
+                BoolExpr::DlLt(from, to, b) => Ok(self.mk_dl_ge(*from, *to, b.clone(), false)),
+                BoolExpr::DlLe(from, to, b) => Ok(self.mk_dl_ge(*from, *to, b.clone(), true)),
+                BoolExpr::DlGe(from, to, b) => Ok(self.mk_dl_le(*from, *to, b.clone(), true)),
+                BoolExpr::DlGt(from, to, b) => Ok(self.mk_dl_le(*from, *to, b.clone(), false)),
                 _ => Ok(!self.encode_bool(inner)?),
             },
 
@@ -326,12 +326,12 @@ impl SeMiTONE {
 
             BoolExpr::Eq(e1, e2) => self.encode_eq(e1, e2),
 
-            BoolExpr::DlLt(from, to, b) => Ok(self.mk_dl_le(from.0, to.0, b.clone(), true)),
-            BoolExpr::DlLe(from, to, b) => Ok(self.mk_dl_le(from.0, to.0, b.clone(), false)),
-            BoolExpr::DlGt(from, to, b) => Ok(self.mk_dl_ge(from.0, to.0, b.clone(), true)),
-            BoolExpr::DlGe(from, to, b) => Ok(self.mk_dl_ge(from.0, to.0, b.clone(), false)),
+            BoolExpr::DlLt(from, to, b) => Ok(self.mk_dl_le(*from, *to, b.clone(), true)),
+            BoolExpr::DlLe(from, to, b) => Ok(self.mk_dl_le(*from, *to, b.clone(), false)),
+            BoolExpr::DlGt(from, to, b) => Ok(self.mk_dl_ge(*from, *to, b.clone(), true)),
+            BoolExpr::DlGe(from, to, b) => Ok(self.mk_dl_ge(*from, *to, b.clone(), false)),
 
-            BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(from.0, to.0, b.clone()),
+            BoolExpr::DlEq(from, to, b) => self.mk_dl_eq(*from, *to, b.clone()),
         }
     }
 
@@ -563,7 +563,7 @@ impl SeMiTONE {
         Ok(p)
     }
 
-    fn mk_dl_le(&mut self, from: usize, to: usize, bound: rug::Rational, strict: bool) -> Lit {
+    fn mk_dl_le(&mut self, from: DlVar, to: DlVar, bound: rug::Rational, strict: bool) -> Lit {
         let delta = if strict { rug::Rational::from(-1) } else { rug::Rational::from(0) };
         let inf_bound = InfRational::new(Rational::Finite(bound), delta);
 
@@ -571,11 +571,11 @@ impl SeMiTONE {
         self.get_or_create_proxy(constraint)
     }
 
-    fn mk_dl_ge(&mut self, from: usize, to: usize, bound: rug::Rational, strict: bool) -> Lit {
+    fn mk_dl_ge(&mut self, from: DlVar, to: DlVar, bound: rug::Rational, strict: bool) -> Lit {
         self.mk_dl_le(to, from, -bound, strict)
     }
 
-    fn mk_dl_eq(&mut self, from: usize, to: usize, bound: rug::Rational) -> Result<Lit, Conflict> {
+    fn mk_dl_eq(&mut self, from: DlVar, to: DlVar, bound: rug::Rational) -> Result<Lit, Conflict> {
         let le_lit = self.mk_dl_le(from, to, bound.clone(), false);
         let ge_lit = self.mk_dl_ge(from, to, bound, false);
 
@@ -1173,12 +1173,12 @@ impl SeMiTONE {
 
     /// Returns the current value of a difference logic variable.
     pub fn get_dl_val(&self, var: DlVar) -> InfRational {
-        self.dl_theory.value(var.0)
+        self.dl_theory.value(var)
     }
 
     /// Returns the current lower and upper bounds of a difference logic variable.
     pub fn get_dl_bounds(&self, var: DlVar) -> (InfRational, InfRational) {
-        (self.dl_theory.lb(var.0), self.dl_theory.ub(var.0))
+        (self.dl_theory.lb(var), self.dl_theory.ub(var))
     }
 
     /// Opens a new incremental user scope for assertions and decisions.

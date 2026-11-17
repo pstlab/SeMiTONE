@@ -1,14 +1,5 @@
-use crate::{enum_theory::EnumVar, lra_theory::ArithVar, sat_solver::BoolVar};
+use crate::{dl_theory::DlVar, enum_theory::EnumVar, lra_theory::ArithVar, sat_solver::BoolVar};
 use std::{fmt, ops};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DlVar(pub(crate) usize);
-
-impl fmt::Display for DlVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "d{}", self.0)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuncId(pub(crate) usize);
