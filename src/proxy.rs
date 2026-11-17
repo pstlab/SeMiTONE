@@ -1,4 +1,4 @@
-use crate::{dl_theory::DlVar, enum_theory::EnumVar, lra_theory::ArithVar, rational::InfRational, sat_solver::BoolVar};
+use crate::{dl_theory::DlVar, enum_theory::EnumVar, euf_theory::EufNode, lra_theory::ArithVar, rational::InfRational, sat_solver::BoolVar};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
@@ -32,5 +32,5 @@ pub(super) enum TheoryConstraint {
     LraUb(ArithVar, InfRational),
     EnumEq(EnumVar, usize),
     DlLeq(DlVar, DlVar, InfRational),
-    EufEq(usize, usize),
+    EufEq(EufNode, EufNode),
 }

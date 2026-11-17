@@ -24,10 +24,10 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, EufNode, Expr, FuncId},
+    ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, Expr},
     dl_theory::{DlTheory, DlVar},
     enum_theory::EnumTheory,
-    euf_theory::EufTheory,
+    euf_theory::{EufTheory, FuncId},
     lra_theory::{ArithVar, LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
@@ -99,17 +99,17 @@ impl SeMiTONE {
 
     /// Allocates a new difference logic variable.
     pub fn new_dl_var(&mut self) -> DlVar {
-        self.dl_theory.new_var()
+        self.dl_theory.mk_var()
     }
 
     /// Allocates a new EUF variable.
     pub fn new_euf_var(&mut self) -> EufExpr {
-        EufExpr::Var(EufNode(self.euf_theory.new_var()))
+        EufExpr::Var(self.euf_theory.new_var())
     }
 
     /// Allocates a new uninterpreted function symbol.
     pub fn new_euf_func(&mut self) -> FuncId {
-        FuncId(self.euf_theory.new_func_id())
+        self.euf_theory.new_func_id()
     }
 
     /// Allocates a new EUF function application with the given function ID and arguments.
@@ -118,8 +118,8 @@ impl SeMiTONE {
         for arg in &args {
             if let Expr::Euf(euf_arg) = arg {
                 let node_id = match euf_arg {
-                    EufExpr::Var(node) => node.0,
-                    EufExpr::App(node, _, _) => node.0,
+                    EufExpr::Var(node) => *node,
+                    EufExpr::App(node, _, _) => *node,
                 };
                 internal_args.push(node_id);
             } else {
@@ -127,8 +127,8 @@ impl SeMiTONE {
             }
         }
 
-        let node_id = self.euf_theory.new_app(func_id.0, internal_args);
-        EufExpr::App(EufNode(node_id), func_id, args)
+        let node_id = self.euf_theory.new_app(func_id, internal_args);
+        EufExpr::App(node_id, func_id, args)
     }
 
     /// Returns the current number of SAT variables allocated in the solver core.
@@ -362,12 +362,12 @@ impl SeMiTONE {
             (Expr::Enum(e1), Expr::Enum(e2)) => self.mk_enum_eq(e1, e2),
             (Expr::Euf(u1), Expr::Euf(u2)) => {
                 let id1 = match u1 {
-                    crate::ast::EufExpr::Var(n) => n.0,
-                    crate::ast::EufExpr::App(n, _, _) => n.0,
+                    crate::ast::EufExpr::Var(n) => n,
+                    crate::ast::EufExpr::App(n, _, _) => n,
                 };
                 let id2 = match u2 {
-                    crate::ast::EufExpr::Var(n) => n.0,
-                    crate::ast::EufExpr::App(n, _, _) => n.0,
+                    crate::ast::EufExpr::Var(n) => n,
+                    crate::ast::EufExpr::App(n, _, _) => n,
                 };
 
                 if id1 == id2 {
@@ -376,7 +376,7 @@ impl SeMiTONE {
 
                 let (min_id, max_id) = if id1 < id2 { (id1, id2) } else { (id2, id1) };
 
-                Ok(self.get_or_create_proxy(TheoryConstraint::EufEq(min_id, max_id)))
+                Ok(self.get_or_create_proxy(TheoryConstraint::EufEq(*min_id, *max_id)))
             }
             _ => panic!("Type mismatch in Eq: cannot compare different domains.\nLeft: {:?}\nRight: {:?}", expr1, expr2),
         }

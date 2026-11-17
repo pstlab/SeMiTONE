@@ -1,50 +1,84 @@
-use rustc_hash::FxHashMap;
-
 use crate::Lit;
-use std::collections::HashSet;
+use rustc_hash::FxHashMap;
+use std::{
+    collections::HashSet,
+    fmt,
+    ops::{Index, IndexMut},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FuncId(usize);
+
+impl fmt::Display for FuncId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "f{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EufNode(usize);
+
+impl<T> Index<EufNode> for Vec<T> {
+    type Output = T;
+    fn index(&self, node: EufNode) -> &Self::Output {
+        &self[node.0]
+    }
+}
+
+impl<T> IndexMut<EufNode> for Vec<T> {
+    fn index_mut(&mut self, node: EufNode) -> &mut Self::Output {
+        &mut self[node.0]
+    }
+}
+
+impl fmt::Display for EufNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "n{}", self.0)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Term {
-    Var(usize),
-    App(usize, Vec<usize>),
+    Var(EufNode),
+    App(FuncId, Vec<EufNode>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Signature {
-    f: usize,
-    args: Vec<usize>,
+    f: FuncId,
+    args: Vec<EufNode>,
 }
 
 #[derive(Clone)]
 enum EufUndoOp {
-    Merged { child: usize, old_size: usize, parent: usize },
-    AppendedUseList { parent: usize, count: usize },
-    ProofRerooted { changes: Vec<(usize, Option<ProofEdge>)> },
+    Merged { child: EufNode, old_size: usize, parent: EufNode },
+    AppendedUseList { parent: EufNode, count: usize },
+    ProofRerooted { changes: Vec<(EufNode, Option<ProofEdge>)> },
     SigInserted { sig: Signature },
-    SigRemoved { sig: Signature, term: usize },
-    UseListPushed { root: usize },
+    SigRemoved { sig: Signature, term: EufNode },
+    UseListPushed { root: EufNode },
 }
 
 #[derive(Clone, Copy, Debug)]
 struct ProofEdge {
-    target: usize,
+    target: EufNode,
     reason: Option<Lit>,
 }
 
 pub(super) struct EufTheory {
-    parents: Vec<usize>,
+    parents: Vec<EufNode>,
     sizes: Vec<usize>,
     terms: Vec<Term>,
-    sig_table: FxHashMap<Signature, usize>,
-    use_list: Vec<Vec<usize>>,
-    pending_merges: Vec<(usize, usize)>,
+    sig_table: FxHashMap<Signature, EufNode>,
+    use_list: Vec<Vec<EufNode>>,
+    pending_merges: Vec<(EufNode, EufNode)>,
     undo_trail: Vec<EufUndoOp>,
     trail_lim: Vec<usize>,
     proof_tree: Vec<Option<ProofEdge>>,
-    disequalities: Vec<(usize, usize, Lit)>,
+    disequalities: Vec<(EufNode, EufNode, Lit)>,
     diseq_lim: Vec<usize>,
     next_func_id: usize,
-    late_apps: Vec<(usize, usize)>,
+    late_apps: Vec<(EufNode, usize)>,
 }
 
 impl EufTheory {
@@ -66,23 +100,23 @@ impl EufTheory {
         }
     }
 
-    pub(super) fn new_var(&mut self) -> usize {
-        let id = self.terms.len();
+    pub(super) fn new_var(&mut self) -> EufNode {
+        let id = EufNode(self.terms.len());
         self.add_term_internal(Term::Var(id))
     }
 
-    pub(super) fn new_func_id(&mut self) -> usize {
-        let id = self.next_func_id;
+    pub(super) fn new_func_id(&mut self) -> FuncId {
+        let id = FuncId(self.next_func_id);
         self.next_func_id += 1;
         id
     }
 
-    pub(super) fn new_app(&mut self, func_id: usize, args: Vec<usize>) -> usize {
+    pub(super) fn new_app(&mut self, func_id: FuncId, args: Vec<EufNode>) -> EufNode {
         self.add_term_internal(Term::App(func_id, args))
     }
 
-    fn add_term_internal(&mut self, term: Term) -> usize {
-        let id = self.terms.len();
+    fn add_term_internal(&mut self, term: Term) -> EufNode {
+        let id = EufNode(self.terms.len());
 
         self.parents.push(id);
         self.sizes.push(1);
@@ -103,11 +137,11 @@ impl EufTheory {
 
     /// Registers an app in the use lists / signature table of the *current* congruence state.
     /// Below level 0 the changes are trailed, so `cancel_until` removes them again.
-    fn register_app(&mut self, id: usize) {
+    fn register_app(&mut self, id: EufNode) {
         let track = !self.trail_lim.is_empty();
         let Term::App(_, args) = &self.terms[id] else { return };
 
-        let mut roots: Vec<usize> = args.iter().map(|&a| self.find(a)).collect();
+        let mut roots: Vec<EufNode> = args.iter().map(|&a| self.find(a)).collect();
         roots.sort_unstable();
         roots.dedup();
         for r in roots {
@@ -130,14 +164,14 @@ impl EufTheory {
         }
     }
 
-    pub(super) fn find(&self, mut term: usize) -> usize {
+    pub(super) fn find(&self, mut term: EufNode) -> EufNode {
         while term != self.parents[term] {
             term = self.parents[term];
         }
         term
     }
 
-    pub(super) fn merge(&mut self, t1: usize, t2: usize, reason: Option<Lit>) -> bool {
+    pub(super) fn merge(&mut self, t1: EufNode, t2: EufNode, reason: Option<Lit>) -> bool {
         let root1 = self.find(t1);
         let root2 = self.find(t2);
 
@@ -189,7 +223,7 @@ impl EufTheory {
         true
     }
 
-    fn reroot(&mut self, node: usize) -> Vec<(usize, Option<ProofEdge>)> {
+    fn reroot(&mut self, node: EufNode) -> Vec<(EufNode, Option<ProofEdge>)> {
         let mut changes = Vec::new();
         let mut curr = node;
         let mut incoming: Option<ProofEdge> = None;
@@ -217,7 +251,7 @@ impl EufTheory {
         }
     }
 
-    pub(super) fn assert_disequality(&mut self, t1: usize, t2: usize, reason: Lit) -> Result<bool, Vec<Lit>> {
+    pub(super) fn assert_disequality(&mut self, t1: EufNode, t2: EufNode, reason: Lit) -> Result<bool, Vec<Lit>> {
         if self.find(t1) == self.find(t2) {
             let mut lemma = vec![reason];
             self.explain(t1, t2, &mut lemma);
@@ -307,11 +341,11 @@ impl EufTheory {
         self.propagate_congruences();
     }
 
-    pub(super) fn explain(&self, t1: usize, t2: usize, explanation: &mut Vec<Lit>) {
+    pub(super) fn explain(&self, t1: EufNode, t2: EufNode, explanation: &mut Vec<Lit>) {
         let mut queue = vec![(t1, t2)];
         // A proof edge is identified by its source node (edges are always crossed upwards),
         // so every edge, and hence every reason literal, is emitted at most once.
-        let mut done: HashSet<usize> = HashSet::new();
+        let mut done: HashSet<EufNode> = HashSet::new();
 
         while let Some((a, b)) = queue.pop() {
             if a == b {
@@ -341,7 +375,7 @@ impl EufTheory {
         }
     }
 
-    fn lca(&self, a: usize, b: usize) -> usize {
+    fn lca(&self, a: EufNode, b: EufNode) -> EufNode {
         let mut ancestors = HashSet::new();
         let mut curr = a;
         ancestors.insert(curr);
@@ -356,7 +390,7 @@ impl EufTheory {
         lca
     }
 
-    fn signature(&self, term_id: usize) -> Option<Signature> {
+    fn signature(&self, term_id: EufNode) -> Option<Signature> {
         if let Term::App(f, ref args) = self.terms[term_id] { Some(Signature { f, args: args.iter().map(|&a| self.find(a)).collect() }) } else { None }
     }
 }
@@ -395,8 +429,8 @@ mod regression_tests {
     fn creation_time_congruence_survives_backtracking() {
         let mut e = EufTheory::new();
         let x = e.new_var();
-        let h1 = e.new_app(7, vec![x]);
-        let h2 = e.new_app(7, vec![x]);
+        let h1 = e.new_app(FuncId(7), vec![x]);
+        let h2 = e.new_app(FuncId(7), vec![x]);
         e.push();
         e.cancel_until(0);
         e.propagate_congruences();
@@ -450,7 +484,7 @@ mod regression_tests {
         }
     }
 
-    fn naive_classes(terms: &[Option<(usize, Vec<usize>)>], eqs: &[(usize, usize)]) -> Vec<usize> {
+    fn naive_classes(terms: &[Option<(FuncId, Vec<EufNode>)>], eqs: &[(EufNode, EufNode)]) -> Vec<EufNode> {
         fn find(p: &mut [usize], mut x: usize) -> usize {
             while p[x] != x {
                 p[x] = p[p[x]];
@@ -460,7 +494,7 @@ mod regression_tests {
         }
         let mut p: Vec<usize> = (0..terms.len()).collect();
         for &(a, b) in eqs {
-            let (ra, rb) = (find(&mut p, a), find(&mut p, b));
+            let (ra, rb) = (find(&mut p, a.0), find(&mut p, b.0));
             p[ra] = rb;
         }
         loop {
@@ -471,7 +505,7 @@ mod regression_tests {
                         && f == g
                         && xs.len() == ys.len()
                         && find(&mut p, i) != find(&mut p, j)
-                        && xs.iter().zip(ys).all(|(&x, &y)| find(&mut p, x) == find(&mut p, y))
+                        && xs.iter().zip(ys).all(|(&x, &y)| find(&mut p, x.0) == find(&mut p, y.0))
                     {
                         let (ri, rj) = (find(&mut p, i), find(&mut p, j));
                         p[ri] = rj;
@@ -483,7 +517,7 @@ mod regression_tests {
                 break;
             }
         }
-        (0..terms.len()).map(|i| find(&mut p, i)).collect()
+        (0..terms.len()).map(|i| EufNode(find(&mut p, i))).collect()
     }
 
     #[test]
@@ -491,26 +525,26 @@ mod regression_tests {
         for seed in 1..3000u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let mut e = EufTheory::new();
-            let mut terms: Vec<Option<(usize, Vec<usize>)>> = Vec::new();
+            let mut terms: Vec<Option<(FuncId, Vec<EufNode>)>> = Vec::new();
             for _ in 0..3 + rng.below(4) {
                 e.new_var();
                 terms.push(None);
             }
             for _ in 0..4 + rng.below(8) {
-                let (f, arity) = (rng.below(3), 1 + rng.below(2));
-                let args: Vec<usize> = (0..arity).map(|_| rng.below(terms.len())).collect();
+                let (f, arity) = (FuncId(rng.below(3)), 1 + rng.below(2));
+                let args: Vec<EufNode> = (0..arity).map(|_| EufNode(rng.below(terms.len()))).collect();
                 e.new_app(f, args.clone());
                 terms.push(Some((f, args)));
             }
             e.propagate_congruences();
 
-            let mut levels: Vec<Vec<(usize, usize)>> = vec![vec![]];
+            let mut levels: Vec<Vec<(EufNode, EufNode)>> = vec![vec![]];
 
             let mut sat = SatSolver::new();
             for step in 0..30 {
                 match rng.below(10) {
                     0..=5 => {
-                        let (a, b) = (rng.below(terms.len()), rng.below(terms.len()));
+                        let (a, b) = (EufNode(rng.below(terms.len())), EufNode(rng.below(terms.len())));
                         e.merge(a, b, Some(Lit::new(sat.mk_var(), false)));
                         e.propagate_congruences();
                         levels.last_mut().unwrap().push((a, b));
@@ -530,7 +564,8 @@ mod regression_tests {
                 let oracle = naive_classes(&terms, &eqs);
                 for i in 0..terms.len() {
                     for j in 0..terms.len() {
-                        assert_eq!(e.find(i) == e.find(j), oracle[i] == oracle[j], "seed {seed} step {step}: pair ({i},{j})");
+                        let (ni, nj) = (EufNode(i), EufNode(j));
+                        assert_eq!(e.find(ni) == e.find(nj), oracle[i] == oracle[j], "seed {seed} step {step}: pair ({i},{j})");
                     }
                 }
             }
@@ -579,17 +614,17 @@ mod regression_tests {
         for seed in 1..3000u64 {
             let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
             let mut e = EufTheory::new();
-            let mut terms: Vec<Option<(usize, Vec<usize>)>> = Vec::new();
+            let mut terms: Vec<Option<(FuncId, Vec<EufNode>)>> = Vec::new();
             for _ in 0..3 + rng.below(3) {
                 e.new_var();
                 terms.push(None);
             }
-            let mut levels: Vec<Vec<(usize, usize)>> = vec![vec![]];
+            let mut levels: Vec<Vec<(EufNode, EufNode)>> = vec![vec![]];
             let mut sat = SatSolver::new();
             for step in 0..40 {
                 match rng.below(12) {
                     0..=4 => {
-                        let (a, b) = (rng.below(terms.len()), rng.below(terms.len()));
+                        let (a, b) = (EufNode(rng.below(terms.len())), EufNode(rng.below(terms.len())));
                         e.merge(a, b, Some(Lit::new(sat.mk_var(), false)));
                         e.propagate_congruences();
                         levels.last_mut().unwrap().push((a, b));
@@ -603,8 +638,8 @@ mod regression_tests {
                             e.new_var();
                             terms.push(None);
                         } else {
-                            let (f, arity) = (rng.below(3), 1 + rng.below(2));
-                            let args: Vec<usize> = (0..arity).map(|_| rng.below(terms.len())).collect();
+                            let (f, arity) = (FuncId(rng.below(3)), 1 + rng.below(2));
+                            let args: Vec<EufNode> = (0..arity).map(|_| EufNode(rng.below(terms.len()))).collect();
                             e.new_app(f, args.clone());
                             terms.push(Some((f, args)));
                         }
@@ -622,7 +657,8 @@ mod regression_tests {
                 let oracle = naive_classes(&terms, &eqs);
                 for i in 0..terms.len() {
                     for j in 0..terms.len() {
-                        assert_eq!(e.find(i) == e.find(j), oracle[i] == oracle[j], "seed {seed} step {step}: pair ({i},{j})");
+                        let (ni, nj) = (EufNode(i), EufNode(j));
+                        assert_eq!(e.find(ni) == e.find(nj), oracle[i] == oracle[j], "seed {seed} step {step}: pair ({i},{j})");
                     }
                 }
             }

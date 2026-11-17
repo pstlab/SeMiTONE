@@ -1,23 +1,11 @@
-use crate::{dl_theory::DlVar, enum_theory::EnumVar, lra_theory::ArithVar, sat_solver::BoolVar};
+use crate::{
+    dl_theory::DlVar,
+    enum_theory::EnumVar,
+    euf_theory::{EufNode, FuncId},
+    lra_theory::ArithVar,
+    sat_solver::BoolVar,
+};
 use std::{fmt, ops};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FuncId(pub(crate) usize);
-
-impl fmt::Display for FuncId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "f{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EufNode(pub(crate) usize);
-
-impl fmt::Display for EufNode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "n{}", self.0)
-    }
-}
 
 /// A typed expression that can be embedded in a generic equality.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

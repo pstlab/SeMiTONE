@@ -68,7 +68,7 @@ impl DlTheory {
         }
     }
 
-    pub(super) fn new_var(&mut self) -> DlVar {
+    pub(super) fn mk_var(&mut self) -> DlVar {
         let id = DlVar(self.graph.len());
 
         self.graph.push(Vec::new());
@@ -242,8 +242,8 @@ mod tests {
     fn test_initialization_and_vars() {
         let mut dl = DlTheory::new();
 
-        let zero = dl.new_var();
-        let x = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
 
         assert_eq!(zero, DlVar(0), "First variable should have ID 0");
         assert_eq!(x, DlVar(1));
@@ -254,9 +254,9 @@ mod tests {
     #[test]
     fn test_simple_bounds_extraction() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
-        let y = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
+        let y = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();
@@ -284,8 +284,8 @@ mod tests {
     #[test]
     fn test_negative_cycle_detection() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();
@@ -306,8 +306,8 @@ mod tests {
     #[test]
     fn test_strict_inequality_infinitesimal_cycle() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();
@@ -323,8 +323,8 @@ mod tests {
     #[test]
     fn test_backtracking_cancel_until() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();
@@ -346,9 +346,9 @@ mod tests {
     #[test]
     fn test_current_value_model() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
-        let y = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
+        let y = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();
@@ -395,9 +395,9 @@ mod tests {
     #[test]
     fn test_failed_cycle_does_not_corrupt_distances() {
         let mut dl = DlTheory::new();
-        let zero = dl.new_var();
-        let x = dl.new_var();
-        let y = dl.new_var();
+        let zero = dl.mk_var();
+        let x = dl.mk_var();
+        let y = dl.mk_var();
 
         let mut sat = SatSolver::new();
         let b1 = sat.mk_var();

@@ -1,5 +1,6 @@
 use crate::{
-    ast::{ArithExpr, BoolExpr, EufExpr, Expr, FuncId},
+    ast::{ArithExpr, BoolExpr, EufExpr, Expr},
+    euf_theory::FuncId,
     rational::Rational,
     solver::Solver,
 };
