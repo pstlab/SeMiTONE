@@ -30,7 +30,7 @@ impl ProxyRegistry {
 pub(super) enum TheoryConstraint {
     LraLb(usize, InfRational),
     LraUb(usize, InfRational),
-    EnumEq(usize, i32),
+    EnumEq(usize, usize),
     DlLeq(usize, usize, InfRational),
     EufEq(usize, usize),
 }

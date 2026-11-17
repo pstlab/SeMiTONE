@@ -271,11 +271,11 @@ pub enum EnumExpr {
     /// An enum variable allocated by [`crate::SeMiTONE::new_enum`].
     Var(EnumVar),
     /// An enum constant.
-    Const(i32),
+    Const(usize),
 }
 
-impl From<i32> for EnumExpr {
-    fn from(n: i32) -> Self {
+impl From<usize> for EnumExpr {
+    fn from(n: usize) -> Self {
         EnumExpr::Const(n)
     }
 }

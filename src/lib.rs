@@ -93,7 +93,7 @@ impl SeMiTONE {
     }
 
     /// Allocates a new enum variable with the given finite domain.
-    pub fn new_enum(&mut self, domain: impl IntoIterator<Item = i32>) -> EnumExpr {
+    pub fn new_enum(&mut self, domain: impl IntoIterator<Item = usize>) -> EnumExpr {
         EnumExpr::Var(EnumVar(self.enum_theory.mk_var(domain.into_iter().collect())))
     }
 
@@ -399,7 +399,7 @@ impl SeMiTONE {
 
                 let domain1 = self.enum_theory.initial_domains[v1.0].clone();
                 let domain2 = self.enum_theory.initial_domains[v2.0].clone();
-                let common: Vec<i32> = domain1.intersection(&domain2).copied().collect();
+                let common: Vec<usize> = domain1.intersection(&domain2).copied().collect();
 
                 if common.is_empty() {
                     return Ok(Lit::FALSE);
@@ -709,7 +709,7 @@ impl SeMiTONE {
     ///
     /// Convenience wrapper around [`SeMiTONE::decide`]. Returns `false` if the
     /// decision cannot be enqueued consistently.
-    pub fn decide_enum(&mut self, expr: impl AsRef<EnumExpr>, value: i32) -> bool {
+    pub fn decide_enum(&mut self, expr: impl AsRef<EnumExpr>, value: usize) -> bool {
         let var = match expr.as_ref() {
             EnumExpr::Var(v) => *v,
             EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
@@ -1158,7 +1158,7 @@ impl SeMiTONE {
     }
 
     /// Returns the concrete value of an enum variable if it has been fully assigned.
-    pub fn get_enum_val(&self, expr: &EnumExpr) -> Option<i32> {
+    pub fn get_enum_val(&self, expr: &EnumExpr) -> Option<usize> {
         match expr {
             EnumExpr::Const(c) => Some(*c),
             EnumExpr::Var(v) => {

@@ -2,13 +2,13 @@ use crate::sat_solver::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(super) struct EnumTheory {
-    pub(super) initial_domains: Vec<FxHashSet<i32>>,
-    pub(super) active_domains: Vec<FxHashSet<i32>>,
+    pub(super) initial_domains: Vec<FxHashSet<usize>>,
+    pub(super) active_domains: Vec<FxHashSet<usize>>,
 
-    trail: Vec<(usize, i32)>,
+    trail: Vec<(usize, usize)>,
     trail_lim: Vec<usize>,
 
-    removal_reasons: FxHashMap<(usize, i32), Lit>,
+    removal_reasons: FxHashMap<(usize, usize), Lit>,
 }
 
 impl EnumTheory {
@@ -22,7 +22,7 @@ impl EnumTheory {
         }
     }
 
-    pub(super) fn mk_var(&mut self, domain: FxHashSet<i32>) -> usize {
+    pub(super) fn mk_var(&mut self, domain: FxHashSet<usize>) -> usize {
         let id = self.initial_domains.len();
         self.initial_domains.push(domain.clone());
         self.active_domains.push(domain);
@@ -47,7 +47,7 @@ impl EnumTheory {
         self.trail_lim.truncate(level);
     }
 
-    pub(super) fn set_eq(&mut self, lit: Option<Lit>, var: usize, val: i32) -> Result<bool, Vec<Lit>> {
+    pub(super) fn set_eq(&mut self, lit: Option<Lit>, var: usize, val: usize) -> Result<bool, Vec<Lit>> {
         if !self.active_domains[var].contains(&val) {
             let mut conflict = Vec::with_capacity(2);
             if let Some(l) = lit {
@@ -59,7 +59,7 @@ impl EnumTheory {
             return Err(conflict);
         }
 
-        let to_remove: Vec<i32> = self.active_domains[var].iter().filter(|&&v| v != val).copied().collect();
+        let to_remove: Vec<usize> = self.active_domains[var].iter().filter(|&&v| v != val).copied().collect();
 
         if to_remove.is_empty() {
             return Ok(false);
@@ -75,7 +75,7 @@ impl EnumTheory {
         Ok(true)
     }
 
-    pub(super) fn set_neq(&mut self, lit: Option<Lit>, var: usize, val: i32) -> Result<bool, Vec<Lit>> {
+    pub(super) fn set_neq(&mut self, lit: Option<Lit>, var: usize, val: usize) -> Result<bool, Vec<Lit>> {
         if !self.active_domains[var].contains(&val) {
             return Ok(false); // Already removed
         }
@@ -112,7 +112,7 @@ mod tests {
 
     fn setup_enum() -> (EnumTheory, usize) {
         let mut theory = EnumTheory::new();
-        let domain: FxHashSet<i32> = vec![1, 2, 3].into_iter().collect();
+        let domain: FxHashSet<usize> = vec![1, 2, 3].into_iter().collect();
         let var = theory.mk_var(domain);
         (theory, var)
     }
