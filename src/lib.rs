@@ -31,7 +31,7 @@ use crate::{
     lra_theory::{LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
-    sat_solver::{Conflict, SatSolver},
+    sat_solver::{BoolVar, Conflict, SatSolver},
 };
 use rug::Assign;
 pub use sat_solver::Lit;
@@ -913,6 +913,11 @@ impl SeMiTONE {
     #[inline]
     pub fn get_lit_val_and_level(&self, lit: Lit) -> Option<(bool, usize)> {
         self.sat_solver.lit_value_and_level(lit)
+    }
+
+    /// Returns an iterator over all Boolean variables in the solver.
+    pub fn vars(&self) -> impl ExactSizeIterator<Item = BoolVar> {
+        self.sat_solver.vars()
     }
 
     /// Returns the assigned value of a Boolean expression when it is fully determined.
