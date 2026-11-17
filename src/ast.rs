@@ -1,15 +1,5 @@
+use crate::{enum_theory::EnumVar, sat_solver::BoolVar};
 use std::{fmt, ops};
-
-use crate::enum_theory::EnumVar;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BoolVar(pub(crate) usize);
-
-impl fmt::Display for BoolVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "b{}", self.0)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntVar(pub(crate) usize);
@@ -675,6 +665,8 @@ pub fn max(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr 
 
 #[cfg(test)]
 mod tests {
+    use crate::SatSolver;
+
     use super::*;
 
     // --- BoolExpr Display ---
@@ -687,22 +679,34 @@ mod tests {
 
     #[test]
     fn bool_display_var() {
-        assert_eq!(BoolExpr::Var(BoolVar(3)).to_string(), "b3");
+        let mut sat = SatSolver::new();
+        let _ = sat.mk_var();
+        let _ = sat.mk_var();
+        let b3 = sat.mk_var();
+        assert_eq!(BoolExpr::Var(b3).to_string(), "b3");
     }
 
     #[test]
     fn bool_display_not() {
-        assert_eq!((!BoolExpr::Var(BoolVar(0))).to_string(), "¬b0");
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        assert_eq!((!BoolExpr::Var(b1)).to_string(), "¬b1");
     }
 
     #[test]
     fn bool_display_and() {
-        assert_eq!((BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1))).to_string(), "(b0 ∧ b1)");
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        assert_eq!((BoolExpr::Var(b1) & BoolExpr::Var(b2)).to_string(), "(b1 ∧ b2)");
     }
 
     #[test]
     fn bool_display_or() {
-        assert_eq!((BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))).to_string(), "(b0 ∨ b1)");
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        assert_eq!((BoolExpr::Var(b1) | BoolExpr::Var(b2)).to_string(), "(b1 ∨ b2)");
     }
 
     #[test]
@@ -715,8 +719,11 @@ mod tests {
 
     #[test]
     fn bool_display_eq() {
-        let e = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(BoolVar(0)))), Box::new(Expr::Bool(BoolExpr::Var(BoolVar(1)))));
-        assert_eq!(e.to_string(), "b0 = b1");
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let e = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(b1))), Box::new(Expr::Bool(BoolExpr::Var(b2))));
+        assert_eq!(e.to_string(), "b1 = b2");
     }
 
     // --- ArithExpr Display ---
@@ -765,51 +772,71 @@ mod tests {
 
     #[test]
     fn push_negations_var_unchanged() {
-        assert_eq!(push_negations(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        assert_eq!(push_negations(&BoolExpr::Var(b1)), BoolExpr::Var(b1));
     }
 
     #[test]
     fn push_negations_not_var_becomes_not_var() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
         // Not(var) has no inner Not, so stays as Not(var)
-        assert_eq!(push_negations(&!BoolExpr::Var(BoolVar(0))), !BoolExpr::Var(BoolVar(0)));
+        assert_eq!(push_negations(&!BoolExpr::Var(b1)), !BoolExpr::Var(b1));
     }
 
     #[test]
     fn push_negations_double_not_eliminates() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
         // Not(Not(x)) => x
-        assert_eq!(push_negations(&!(!BoolExpr::Var(BoolVar(0)))), BoolExpr::Var(BoolVar(0)));
+        assert_eq!(push_negations(&!(!BoolExpr::Var(b1))), BoolExpr::Var(b1));
     }
 
     #[test]
     fn push_negations_triple_not() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
         // Not(Not(Not(x))) => Not(x)
-        assert_eq!(push_negations(&!(!(!BoolExpr::Var(BoolVar(0))))), !BoolExpr::Var(BoolVar(0)));
+        assert_eq!(push_negations(&!(!(!BoolExpr::Var(b1)))), !BoolExpr::Var(b1));
     }
 
     #[test]
     fn push_negations_recurses_into_and() {
-        let expr = !(!BoolExpr::Var(BoolVar(0))) & !(!BoolExpr::Var(BoolVar(1)));
-        assert_eq!(push_negations(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let expr = !(!BoolExpr::Var(b1)) & !(!BoolExpr::Var(b2));
+        assert_eq!(push_negations(&expr), BoolExpr::Var(b1) & BoolExpr::Var(b2));
     }
 
     #[test]
     fn push_negations_recurses_into_or() {
-        let expr = !(!BoolExpr::Var(BoolVar(0))) | BoolExpr::Var(BoolVar(1));
-        assert_eq!(push_negations(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let expr = !(!BoolExpr::Var(b1)) | BoolExpr::Var(b2);
+        assert_eq!(push_negations(&expr), BoolExpr::Var(b1) | BoolExpr::Var(b2));
     }
 
     #[test]
     fn push_negations_not_and_demorgan() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
         // Not(And(a, b)) => Or(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
-        assert_eq!(push_negations(&expr), !BoolExpr::Var(BoolVar(0)) | !BoolExpr::Var(BoolVar(1)));
+        let expr = !(BoolExpr::Var(b1) & BoolExpr::Var(b2));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(b1) | !BoolExpr::Var(b2));
     }
 
     #[test]
     fn push_negations_not_or_demorgan() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
-        assert_eq!(push_negations(&expr), !BoolExpr::Var(BoolVar(0)) & !BoolExpr::Var(BoolVar(1)));
+        let expr = !(BoolExpr::Var(b1) | BoolExpr::Var(b2));
+        assert_eq!(push_negations(&expr), !BoolExpr::Var(b1) & !BoolExpr::Var(b2));
     }
 
     #[test]
@@ -838,7 +865,10 @@ mod tests {
 
     #[test]
     fn push_negations_not_eq_stays_not_eq() {
-        let inner = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(BoolVar(0)))), Box::new(Expr::Bool(BoolExpr::Var(BoolVar(1)))));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let inner = BoolExpr::Eq(Box::new(Expr::Bool(BoolExpr::Var(b1))), Box::new(Expr::Bool(BoolExpr::Var(b2))));
         let expr = !inner.clone();
         assert_eq!(push_negations(&expr), !inner);
     }
@@ -847,55 +877,84 @@ mod tests {
 
     #[test]
     fn distribute_atom_unchanged() {
-        assert_eq!(distribute(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        assert_eq!(distribute(&BoolExpr::Var(b1)), BoolExpr::Var(b1));
         assert_eq!(distribute(&BoolExpr::True), BoolExpr::True);
     }
 
     #[test]
     fn distribute_and_of_atoms() {
-        let expr = BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1));
-        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let expr = BoolExpr::Var(b1) & BoolExpr::Var(b2);
+        assert_eq!(distribute(&expr), BoolExpr::Var(b1) & BoolExpr::Var(b2));
     }
 
     #[test]
     fn distribute_or_of_atoms() {
-        let expr = BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let expr = BoolExpr::Var(b1) | BoolExpr::Var(b2);
         // Or(a, b) with no And inside stays as-is (wrapped in And with one element, unwrapped)
-        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
+        assert_eq!(distribute(&expr), BoolExpr::Var(b1) | BoolExpr::Var(b2));
     }
 
     #[test]
     fn distribute_or_over_and() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
-        let expected = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(2)));
+        let expr = BoolExpr::Var(b1) | (BoolExpr::Var(b2) & BoolExpr::Var(b3));
+        let expected = (BoolExpr::Var(b1) | BoolExpr::Var(b2)) & (BoolExpr::Var(b1) | BoolExpr::Var(b3));
         assert_eq!(distribute(&expr), expected);
     }
 
     #[test]
     fn distribute_flattens_nested_or() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
         // Or(Or(a, b), c) => Or(a, b, c)
-        let expr = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) | BoolExpr::Var(BoolVar(2));
-        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)) | BoolExpr::Var(BoolVar(2)));
+        let expr = (BoolExpr::Var(b1) | BoolExpr::Var(b2)) | BoolExpr::Var(b3);
+        assert_eq!(distribute(&expr), BoolExpr::Var(b1) | BoolExpr::Var(b2) | BoolExpr::Var(b3));
     }
 
     #[test]
     fn distribute_flattens_nested_and() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
         // And(And(a, b), c) => And(a, b, c)
-        let expr = BoolExpr::Var(BoolVar(0)) & (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
-        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        let expr = BoolExpr::Var(b1) & (BoolExpr::Var(b2) & BoolExpr::Var(b3));
+        assert_eq!(distribute(&expr), BoolExpr::Var(b1) & BoolExpr::Var(b2) & BoolExpr::Var(b3));
     }
 
     #[test]
     fn distribute_and_inside_and_flattened() {
-        let expr = BoolExpr::Var(BoolVar(0)) & (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
-        assert_eq!(distribute(&expr), BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+        let expr = BoolExpr::Var(b1) & (BoolExpr::Var(b2) & BoolExpr::Var(b3));
+        assert_eq!(distribute(&expr), BoolExpr::Var(b1) & BoolExpr::Var(b2) & BoolExpr::Var(b3));
     }
 
     #[test]
     fn distribute_cartesian_product_two_ands() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+        let b4 = sat.mk_var();
         // Or(And(a, b), And(c, d)) => And(Or(a,c), Or(a,d), Or(b,c), Or(b,d))
-        let expr = (BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1))) | (BoolExpr::Var(BoolVar(2)) & BoolExpr::Var(BoolVar(3)));
+        let expr = (BoolExpr::Var(b1) & BoolExpr::Var(b2)) | (BoolExpr::Var(b3) & BoolExpr::Var(b4));
         let result = distribute(&expr);
         // Should be an And of four Or clauses
         if let BoolExpr::And(clauses) = result {
@@ -912,40 +971,59 @@ mod tests {
 
     #[test]
     fn to_cnf_atom_unchanged() {
-        assert_eq!(to_cnf(&BoolExpr::Var(BoolVar(0))), BoolExpr::Var(BoolVar(0)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        assert_eq!(to_cnf(&BoolExpr::Var(b1)), BoolExpr::Var(b1));
     }
 
     #[test]
     fn to_cnf_already_cnf() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+        let b4 = sat.mk_var();
         // And(Or(a, b), Or(c, d)) is already CNF
-        let expr = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(2)) | BoolExpr::Var(BoolVar(3)));
+        let expr = (BoolExpr::Var(b1) | BoolExpr::Var(b2)) & (BoolExpr::Var(b3) | BoolExpr::Var(b4));
         assert_eq!(to_cnf(&expr), expr);
     }
 
     #[test]
     fn to_cnf_double_negation() {
-        assert_eq!(to_cnf(&!(!BoolExpr::Var(BoolVar(0)))), BoolExpr::Var(BoolVar(0)));
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        assert_eq!(to_cnf(&!(!BoolExpr::Var(b1))), BoolExpr::Var(b1));
     }
 
     #[test]
     fn to_cnf_not_and_demorgan_then_distribute() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
         // Not(And(a, b)) => Or(Not(a), Not(b)) — already a single clause
-        let expr = !(BoolExpr::Var(BoolVar(0)) & BoolExpr::Var(BoolVar(1)));
-        assert_eq!(to_cnf(&expr), !BoolExpr::Var(BoolVar(0)) | !BoolExpr::Var(BoolVar(1)));
+        let expr = !(BoolExpr::Var(b1) & BoolExpr::Var(b2));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(b1) | !BoolExpr::Var(b2));
     }
 
     #[test]
     fn to_cnf_not_or_demorgan() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
         // Not(Or(a, b)) => And(Not(a), Not(b))
-        let expr = !(BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1)));
-        assert_eq!(to_cnf(&expr), !BoolExpr::Var(BoolVar(0)) & !BoolExpr::Var(BoolVar(1)));
+        let expr = !(BoolExpr::Var(b1) | BoolExpr::Var(b2));
+        assert_eq!(to_cnf(&expr), !BoolExpr::Var(b1) & !BoolExpr::Var(b2));
     }
 
     #[test]
     fn to_cnf_or_over_and_distributes() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
         // Or(a, And(b, c)) => And(Or(a, b), Or(a, c))
-        let expr = BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2)));
-        let expected = (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(1))) & (BoolExpr::Var(BoolVar(0)) | BoolExpr::Var(BoolVar(2)));
+        let expr = BoolExpr::Var(b1) | (BoolExpr::Var(b2) & BoolExpr::Var(b3));
+        let expected = (BoolExpr::Var(b1) | BoolExpr::Var(b2)) & (BoolExpr::Var(b1) | BoolExpr::Var(b3));
         assert_eq!(to_cnf(&expr), expected);
     }
 
@@ -957,8 +1035,12 @@ mod tests {
 
     #[test]
     fn to_cnf_nested_not_and_or() {
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
         // Not(Or(And(a,b), c)) => And(Or(Not(a), Not(c)), Or(Not(b), Not(c)))
-        let expr = !(BoolExpr::Var(BoolVar(0)) | (BoolExpr::Var(BoolVar(1)) & BoolExpr::Var(BoolVar(2))));
+        let expr = !(BoolExpr::Var(b1) | (BoolExpr::Var(b2) & BoolExpr::Var(b3)));
         // push_negations: And(Or(Not(a), Not(b)), Not(c))
         // distribute: And of Or(Not(a),Not(b)) and Not(c) — already flat
         let result = to_cnf(&expr);

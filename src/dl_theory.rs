@@ -210,6 +210,7 @@ impl DlTheory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SatSolver;
 
     #[test]
     fn test_initialization_and_vars() {
@@ -231,14 +232,19 @@ mod tests {
         let x = dl.new_var();
         let y = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(100, false)).is_ok());
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
 
-        assert!(dl.assert_edge(x, y, InfRational::from(5), Lit::new(101, false)).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(b1, false)).is_ok());
+
+        assert!(dl.assert_edge(x, y, InfRational::from(5), Lit::new(b2, false)).is_ok());
 
         assert_eq!(dl.ub(x), InfRational::from(10));
         assert_eq!(dl.ub(y), InfRational::from(15));
 
-        assert!(dl.assert_edge(x, zero, InfRational::from(-3), Lit::new(102, false)).is_ok());
+        assert!(dl.assert_edge(x, zero, InfRational::from(-3), Lit::new(b3, false)).is_ok());
 
         assert_eq!(dl.lb(x), InfRational::from(3));
 
@@ -255,16 +261,20 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(1, false)).is_ok());
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
 
-        let res = dl.assert_edge(x, zero, InfRational::from(-10), Lit::new(2, false));
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(b1, false)).is_ok());
+
+        let res = dl.assert_edge(x, zero, InfRational::from(-10), Lit::new(b2, false));
 
         assert!(res.is_err(), "Should detect a negative cycle");
 
         let nogood = res.unwrap_err();
         assert_eq!(nogood.len(), 2);
-        assert!(nogood.contains(&Lit::new(1, true)));
-        assert!(nogood.contains(&Lit::new(2, true)));
+        assert!(nogood.contains(&Lit::new(b1, true)));
+        assert!(nogood.contains(&Lit::new(b2, true)));
     }
 
     #[test]
@@ -273,9 +283,13 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(1, false)).is_ok());
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
 
-        let res = dl.assert_edge(x, zero, InfRational::from((Rational::from(-5), -1)), Lit::new(2, false));
+        assert!(dl.assert_edge(zero, x, InfRational::from(5), Lit::new(b1, false)).is_ok());
+
+        let res = dl.assert_edge(x, zero, InfRational::from((Rational::from(-5), -1)), Lit::new(b2, false));
 
         assert!(res.is_err(), "Should detect a negative cycle with infinitesimal weight");
     }
@@ -286,11 +300,15 @@ mod tests {
         let zero = dl.new_var();
         let x = dl.new_var();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(1, false)).is_ok());
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(b1, false)).is_ok());
 
         dl.push();
 
-        assert!(dl.assert_edge(zero, x, InfRational::from(2), Lit::new(2, false)).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(2), Lit::new(b2, false)).is_ok());
         assert_eq!(dl.ub(x), InfRational::from(2), "UB should be updated to 2 after the second edge is added");
 
         dl.cancel_until(0);
@@ -306,22 +324,30 @@ mod tests {
         let x = dl.new_var();
         let y = dl.new_var();
 
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+        let b4 = sat.mk_var();
+        let b5 = sat.mk_var();
+        let b6 = sat.mk_var();
+
         // 1. Constraints on X: 5 <= X <= 10
         // X - zero <= 10
-        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(1, false)).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(10), Lit::new(b1, false)).is_ok());
         // zero - X <= -5  (that is, X >= 5)
-        assert!(dl.assert_edge(x, zero, InfRational::from(-5), Lit::new(2, false)).is_ok());
+        assert!(dl.assert_edge(x, zero, InfRational::from(-5), Lit::new(b2, false)).is_ok());
 
         let val_x = dl.value(x);
         assert!(val_x >= InfRational::from(5), "The current value of X must satisfy the lower bound");
         assert!(val_x <= InfRational::from(10), "The current value of X must satisfy the upper bound");
 
         // 2. Relative constraint on Y: Y - X <= 7
-        assert!(dl.assert_edge(x, y, InfRational::from(7), Lit::new(3, false)).is_ok());
+        assert!(dl.assert_edge(x, y, InfRational::from(7), Lit::new(b3, false)).is_ok());
 
         // 3. Absolute constraint on Y: Y >= 15
         // zero - Y <= -15
-        assert!(dl.assert_edge(y, zero, InfRational::from(-15), Lit::new(4, false)).is_ok());
+        assert!(dl.assert_edge(y, zero, InfRational::from(-15), Lit::new(b4, false)).is_ok());
 
         // Extract the new values (the distances were relaxed due to the cycles)
         let val_x2 = dl.value(x);
@@ -334,8 +360,8 @@ mod tests {
         assert!(val_x2 <= InfRational::from(10), "The upper bound of X is not satisfied after updating Y");
 
         // 4. Exact equality test: force X = 8
-        assert!(dl.assert_edge(zero, x, InfRational::from(8), Lit::new(5, false)).is_ok());
-        assert!(dl.assert_edge(x, zero, InfRational::from(-8), Lit::new(6, false)).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(8), Lit::new(b5, false)).is_ok());
+        assert!(dl.assert_edge(x, zero, InfRational::from(-8), Lit::new(b6, false)).is_ok());
 
         assert_eq!(dl.value(x), InfRational::from(8), "The value of X must be exactly 8");
     }
@@ -347,18 +373,23 @@ mod tests {
         let x = dl.new_var();
         let y = dl.new_var();
 
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+
         // Level 0:
         // 1) x - zero <= -2  (x <= -2)
-        assert!(dl.assert_edge(zero, x, InfRational::from(-2), Lit::new(1, false)).is_ok());
+        assert!(dl.assert_edge(zero, x, InfRational::from(-2), Lit::new(b1, false)).is_ok());
         // 2) y - x <= 0      (y <= x)
-        assert!(dl.assert_edge(x, y, InfRational::from(0), Lit::new(2, false)).is_ok());
+        assert!(dl.assert_edge(x, y, InfRational::from(0), Lit::new(b2, false)).is_ok());
 
         assert!(dl.value(x) <= InfRational::from(-2));
         assert!(dl.value(y) <= dl.value(x), "At level 0, y <= x must hold");
 
         // Level 1: add zero - x <= -5 (x >= 5), which creates a negative cycle with x <= -2
         dl.push();
-        let conflict = dl.assert_edge(x, zero, InfRational::from(-5), Lit::new(3, false));
+        let conflict = dl.assert_edge(x, zero, InfRational::from(-5), Lit::new(b3, false));
         assert!(conflict.is_err(), "Should detect the negative cycle between zero and x");
 
         // Backtrack to level 0

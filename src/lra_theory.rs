@@ -767,6 +767,7 @@ enum BoundUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SatSolver;
 
     fn add_test_row(theory: &mut LraTheory, basic_var: usize, terms: &[(usize, i32)]) {
         let mut row = SparseRow::new();
@@ -875,24 +876,29 @@ mod tests {
         let y = lra.mk_real();
         let s = lra.mk_real();
 
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+
         add_test_row(&mut lra, s, &[(x, 1), (y, 1)]);
 
-        lra.set_lb(Some(Lit::new(1, false)), x, InfRational::from(3)).expect("setting lower bound should succeed");
+        lra.set_lb(Some(Lit::new(b1, false)), x, InfRational::from(3)).expect("setting lower bound should succeed");
         assert_eq!(lra.value(s), &InfRational::from(3));
 
-        lra.set_lb(Some(Lit::new(2, false)), y, InfRational::from(4)).expect("setting lower bound should succeed");
+        lra.set_lb(Some(Lit::new(b2, false)), y, InfRational::from(4)).expect("setting lower bound should succeed");
         assert_eq!(lra.value(s), &InfRational::from(7));
 
-        lra.set_ub(Some(Lit::new(3, false)), s, InfRational::from(5)).expect("setting upper bound should succeed");
+        lra.set_ub(Some(Lit::new(b3, false)), s, InfRational::from(5)).expect("setting upper bound should succeed");
 
         let result = lra.check();
 
         assert!(result.is_err());
         let conflict = result.unwrap_err();
 
-        assert!(conflict.contains(&Lit::new(1, true)));
-        assert!(conflict.contains(&Lit::new(2, true)));
-        assert!(conflict.contains(&Lit::new(3, true)));
+        assert!(conflict.contains(&Lit::new(b1, true)));
+        assert!(conflict.contains(&Lit::new(b2, true)));
+        assert!(conflict.contains(&Lit::new(b3, true)));
     }
 
     #[test]

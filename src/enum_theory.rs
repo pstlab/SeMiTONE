@@ -143,6 +143,7 @@ impl EnumTheory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SatSolver;
 
     fn setup_enum() -> (EnumTheory, EnumVar) {
         let mut theory = EnumTheory::new();
@@ -155,9 +156,14 @@ mod tests {
     fn test_enum_exhaustive_denial_conflict() {
         let (mut theory, var) = setup_enum();
 
-        let lit1 = Lit::new(1, false); // SAT deduce: var != 1
-        let lit2 = Lit::new(2, false); // SAT deduce: var != 2
-        let lit3 = Lit::new(3, false); // SAT deduce: var != 3
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+
+        let lit1 = Lit::new(b1, false); // SAT deduce: var != 1
+        let lit2 = Lit::new(b2, false); // SAT deduce: var != 2
+        let lit3 = Lit::new(b3, false); // SAT deduce: var != 3
 
         assert_eq!(theory.set_neq(Some(lit1), var, 1), Ok(true));
         assert_eq!(theory.set_neq(Some(lit2), var, 2), Ok(true));
@@ -177,8 +183,12 @@ mod tests {
     fn test_enum_positive_contradiction() {
         let (mut theory, var) = setup_enum();
 
-        let lit_deny = Lit::new(1, false);
-        let lit_assert = Lit::new(2, false);
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+
+        let lit_deny = Lit::new(b1, false);
+        let lit_assert = Lit::new(b2, false);
 
         assert_eq!(theory.set_neq(Some(lit_deny), var, 1), Ok(true));
 
@@ -195,8 +205,12 @@ mod tests {
     fn test_enum_positive_assignment_removes_others() {
         let (mut theory, var) = setup_enum();
 
-        let lit_set_1 = Lit::new(1, false);
-        let lit_set_2 = Lit::new(2, false);
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+
+        let lit_set_1 = Lit::new(b1, false);
+        let lit_set_2 = Lit::new(b2, false);
 
         assert_eq!(theory.set_eq(Some(lit_set_1), var, 1), Ok(true));
         assert_eq!(theory.active_domain[var].len(), 1);
@@ -214,7 +228,10 @@ mod tests {
     #[test]
     fn test_enum_backtracking_recovers_domain() {
         let (mut theory, var) = setup_enum();
-        let lit1 = Lit::new(1, false);
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+
+        let lit1 = Lit::new(b1, false);
 
         theory.push();
 

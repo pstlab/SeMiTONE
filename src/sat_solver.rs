@@ -1,6 +1,31 @@
-use crate::out_of_bounds;
-use std::{collections::VecDeque, fmt, mem, ops};
+use std::{
+    collections::VecDeque,
+    fmt, mem,
+    ops::{self, Index, IndexMut},
+};
 use tracing::trace;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoolVar(usize);
+
+impl<T> Index<BoolVar> for Vec<T> {
+    type Output = T;
+    fn index(&self, var: BoolVar) -> &Self::Output {
+        &self[var.0]
+    }
+}
+
+impl<T> IndexMut<BoolVar> for Vec<T> {
+    fn index_mut(&mut self, var: BoolVar) -> &mut Self::Output {
+        &mut self[var.0]
+    }
+}
+
+impl fmt::Display for BoolVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "b{}", self.0)
+    }
+}
 
 pub type Conflict = (usize, Vec<Lit>);
 
@@ -10,7 +35,7 @@ pub(super) struct SatSolver {
     watches: Vec<Vec<usize>>,         // Watch lists for each literal (positive and negative)
     reason: Vec<Option<usize>>,       // Reason for each variable's assignment
     seen: Vec<bool>,                  // Temporary storage for conflict analysis
-    analyze_toclear: Vec<usize>,      // Temporary storage for conflict analysis
+    analyze_toclear: Vec<BoolVar>,    // Temporary storage for conflict analysis
     prop_q: VecDeque<Lit>,            // Queue of literals to propagate
     pub(super) trail: Vec<Lit>,       // Trail of assigned literals for backtracking
     pub(super) trail_lim: Vec<usize>, // Indices in the trail where decisions were made
@@ -39,8 +64,8 @@ impl SatSolver {
         sat
     }
 
-    pub(super) fn mk_var(&mut self) -> usize {
-        let idx = self.assigns.len();
+    pub(super) fn mk_var(&mut self) -> BoolVar {
+        let idx = BoolVar(self.assigns.len());
         trace!("Creating new variable b{}", idx);
         self.assigns.push(None);
         self.watches.push(Vec::new());
@@ -142,7 +167,7 @@ impl SatSolver {
 
         let mut path_c = 0;
         let mut p_lit = None; // Option<Lit>
-        let mut learnt = vec![Lit::new(0, false)];
+        let mut learnt = vec![Lit::new(BoolVar(0), false)];
         let mut index = self.trail.len();
         let mut confl = 0;
 
@@ -332,8 +357,8 @@ impl SatSolver {
 
     /// Returns the assigned value of a variable, if any.
     #[inline]
-    pub(super) fn value(&self, var: usize) -> Option<bool> {
-        self.assigns.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
+    pub(super) fn value(&self, var: BoolVar) -> Option<bool> {
+        self.assigns[var]
     }
 
     /// Returns the assigned value of a literal, if any.
@@ -345,8 +370,8 @@ impl SatSolver {
 
     /// Returns the decision level at which a variable was assigned, if any.
     #[inline]
-    pub(super) fn level(&self, var: usize) -> Option<usize> {
-        self.level.get(var).copied().unwrap_or_else(|| out_of_bounds(var))
+    pub(super) fn level(&self, var: BoolVar) -> Option<usize> {
+        self.level[var]
     }
 
     /// Returns the decision level at which a literal was assigned, if any.
@@ -446,13 +471,13 @@ pub struct Lit {
 }
 
 impl Lit {
-    pub fn new(var: usize, sign: bool) -> Self {
-        Lit { x: var * 2 + sign as usize }
+    pub fn new(var: BoolVar, sign: bool) -> Self {
+        Lit { x: var.0 * 2 + sign as usize }
     }
 
     /// Variable index.
-    pub fn var(self) -> usize {
-        self.x >> 1
+    pub fn var(self) -> BoolVar {
+        BoolVar(self.x >> 1)
     }
 
     /// True if this is a negated literal.

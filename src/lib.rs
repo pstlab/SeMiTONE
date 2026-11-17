@@ -24,7 +24,7 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
+    ast::{ArithExpr, BoolExpr, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
     euf_theory::EufTheory,
@@ -79,7 +79,7 @@ impl SeMiTONE {
 
     /// Allocates a new Boolean variable.
     pub fn new_bool(&mut self) -> BoolExpr {
-        BoolExpr::Var(BoolVar(self.sat_solver.mk_var()))
+        BoolExpr::Var(self.sat_solver.mk_var())
     }
 
     /// Allocates a new integer variable.
@@ -226,7 +226,7 @@ impl SeMiTONE {
         match expr {
             BoolExpr::True => Ok(Lit::TRUE),
             BoolExpr::False => Ok(Lit::FALSE),
-            BoolExpr::Var(v) => Ok(Lit::new(v.0, false)),
+            BoolExpr::Var(v) => Ok(Lit::new(*v, false)),
 
             BoolExpr::Not(inner) => match inner.as_ref() {
                 BoolExpr::Lt(a1, a2) => Ok(self.mk_ge(a1, a2, false)),
@@ -922,7 +922,7 @@ impl SeMiTONE {
         match expr {
             BoolExpr::True => Some(true),
             BoolExpr::False => Some(false),
-            BoolExpr::Var(v) => self.sat_solver.value(v.0),
+            BoolExpr::Var(v) => self.sat_solver.value(*v),
             BoolExpr::Not(inner) => self.get_bool_val(inner).map(|val| !val),
             BoolExpr::And(args) => {
                 let mut result = Some(true);

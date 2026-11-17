@@ -1,10 +1,10 @@
-use crate::{enum_theory::EnumVar, rational::InfRational};
+use crate::{enum_theory::EnumVar, rational::InfRational, sat_solver::BoolVar};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
 pub struct ProxyRegistry {
-    pub proxy_to_constraint: FxHashMap<usize, TheoryConstraint>,
-    pub constraint_to_proxy: FxHashMap<TheoryConstraint, usize>,
+    pub proxy_to_constraint: FxHashMap<BoolVar, TheoryConstraint>,
+    pub constraint_to_proxy: FxHashMap<TheoryConstraint, BoolVar>,
 }
 
 impl ProxyRegistry {
@@ -12,17 +12,17 @@ impl ProxyRegistry {
         Self { proxy_to_constraint: HashMap::default(), constraint_to_proxy: HashMap::default() }
     }
 
-    pub fn get_proxy(&self, constraint: &TheoryConstraint) -> Option<usize> {
+    pub fn get_proxy(&self, constraint: &TheoryConstraint) -> Option<BoolVar> {
         self.constraint_to_proxy.get(constraint).copied()
     }
 
-    pub fn get_constraint(&self, lit: usize) -> Option<&TheoryConstraint> {
-        self.proxy_to_constraint.get(&lit)
+    pub fn get_constraint(&self, var: BoolVar) -> Option<&TheoryConstraint> {
+        self.proxy_to_constraint.get(&var)
     }
 
-    pub fn register(&mut self, constraint: TheoryConstraint, lit: usize) {
-        self.proxy_to_constraint.insert(lit, constraint.clone());
-        self.constraint_to_proxy.insert(constraint, lit);
+    pub fn register(&mut self, constraint: TheoryConstraint, var: BoolVar) {
+        self.proxy_to_constraint.insert(var, constraint.clone());
+        self.constraint_to_proxy.insert(constraint, var);
     }
 }
 

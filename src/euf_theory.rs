@@ -364,21 +364,28 @@ impl EufTheory {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+    use crate::SatSolver;
 
     /// Terms created after a merge must register on the class root, not on the raw argument.
     #[test]
     fn term_created_after_merge_is_congruent() {
         let mut e = EufTheory::new();
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+        let b3 = sat.mk_var();
+        let b4 = sat.mk_var();
+
         let f = e.new_func_id();
         let x = e.new_var();
         let y = e.new_var();
         let (w1, w2, w3) = (e.new_var(), e.new_var(), e.new_var());
         let fw = e.new_app(f, vec![w1]);
-        e.merge(w1, w2, Some(Lit::new(1, false)));
-        e.merge(w1, w3, Some(Lit::new(2, false)));
-        e.merge(x, y, Some(Lit::new(3, false)));
+        e.merge(w1, w2, Some(Lit::new(b1, false)));
+        e.merge(w1, w3, Some(Lit::new(b2, false)));
+        e.merge(x, y, Some(Lit::new(b3, false)));
         let fy = e.new_app(f, vec![y]); // y is a non-root here
-        e.merge(x, w1, Some(Lit::new(4, false))); // x's class becomes the child
+        e.merge(x, w1, Some(Lit::new(b4, false))); // x's class becomes the child
         e.propagate_congruences();
         assert_eq!(e.find(fy), e.find(fw));
     }
@@ -410,6 +417,10 @@ mod regression_tests {
     #[test]
     fn explanation_is_linear_on_shared_subproofs() {
         let mut e = EufTheory::new();
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+
         let f = e.new_func_id();
         let (mut a, mut b, mut c, mut d) = (e.new_var(), e.new_var(), e.new_var(), e.new_var());
         let (a0, b0, c0, d0) = (a, b, c, d);
@@ -419,8 +430,8 @@ mod regression_tests {
             (a, b, c, d) = (na, nb, nc, nd);
         }
         e.propagate_congruences();
-        e.merge(a0, b0, Some(Lit::new(1, false)));
-        e.merge(c0, d0, Some(Lit::new(2, false)));
+        e.merge(a0, b0, Some(Lit::new(b1, false)));
+        e.merge(c0, d0, Some(Lit::new(b2, false)));
         e.propagate_congruences();
         let mut lemma = Vec::new();
         e.explain(a, b, &mut lemma);
@@ -494,13 +505,13 @@ mod regression_tests {
             e.propagate_congruences();
 
             let mut levels: Vec<Vec<(usize, usize)>> = vec![vec![]];
-            let mut lit = 1;
+
+            let mut sat = SatSolver::new();
             for step in 0..30 {
                 match rng.below(10) {
                     0..=5 => {
                         let (a, b) = (rng.below(terms.len()), rng.below(terms.len()));
-                        e.merge(a, b, Some(Lit::new(lit, false)));
-                        lit += 1;
+                        e.merge(a, b, Some(Lit::new(sat.mk_var(), false)));
                         e.propagate_congruences();
                         levels.last_mut().unwrap().push((a, b));
                     }
@@ -530,17 +541,21 @@ mod regression_tests {
     #[test]
     fn app_created_at_depth_is_registered_correctly() {
         let mut e = EufTheory::new();
+        let mut sat = SatSolver::new();
+        let b1 = sat.mk_var();
+        let b2 = sat.mk_var();
+
         let f = e.new_func_id();
         let (a, b) = (e.new_var(), e.new_var());
         e.push();
-        e.merge(b, a, Some(Lit::new(1, false))); // root = b
+        e.merge(b, a, Some(Lit::new(b1, false))); // root = b
         let fa = e.new_app(f, vec![a]); // a is a non-root here
         e.cancel_until(0);
         let fb = e.new_app(f, vec![b]);
         e.propagate_congruences();
         assert_ne!(e.find(fa), e.find(fb), "a != b at level 0, so f(a) != f(b)");
         e.push();
-        e.merge(a, b, Some(Lit::new(2, false)));
+        e.merge(a, b, Some(Lit::new(b2, false)));
         e.propagate_congruences();
         assert_eq!(e.find(fa), e.find(fb), "late app must take part in congruence closure");
     }
@@ -570,13 +585,12 @@ mod regression_tests {
                 terms.push(None);
             }
             let mut levels: Vec<Vec<(usize, usize)>> = vec![vec![]];
-            let mut lit = 1;
+            let mut sat = SatSolver::new();
             for step in 0..40 {
                 match rng.below(12) {
                     0..=4 => {
                         let (a, b) = (rng.below(terms.len()), rng.below(terms.len()));
-                        e.merge(a, b, Some(Lit::new(lit, false)));
-                        lit += 1;
+                        e.merge(a, b, Some(Lit::new(sat.mk_var(), false)));
                         e.propagate_congruences();
                         levels.last_mut().unwrap().push((a, b));
                     }
