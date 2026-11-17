@@ -1,20 +1,13 @@
 use std::{fmt, ops};
 
+use crate::enum_theory::EnumVar;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BoolVar(pub(crate) usize);
 
 impl fmt::Display for BoolVar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "b{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EnumVar(pub(crate) usize);
-
-impl fmt::Display for EnumVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "e{}", self.0)
     }
 }
 

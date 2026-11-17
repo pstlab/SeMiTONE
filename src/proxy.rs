@@ -1,4 +1,4 @@
-use crate::rational::InfRational;
+use crate::{enum_theory::EnumVar, rational::InfRational};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
@@ -30,7 +30,7 @@ impl ProxyRegistry {
 pub(super) enum TheoryConstraint {
     LraLb(usize, InfRational),
     LraUb(usize, InfRational),
-    EnumEq(usize, usize),
+    EnumEq(EnumVar, usize),
     DlLeq(usize, usize, InfRational),
     EufEq(usize, usize),
 }

@@ -24,7 +24,7 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EnumVar, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
+    ast::{ArithExpr, BoolExpr, BoolVar, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
     euf_theory::EufTheory,
@@ -94,7 +94,7 @@ impl SeMiTONE {
 
     /// Allocates a new enum variable with the given finite domain.
     pub fn new_enum(&mut self, domain: impl IntoIterator<Item = usize>) -> EnumExpr {
-        EnumExpr::Var(EnumVar(self.enum_theory.mk_var(domain.into_iter().collect())))
+        EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
     }
 
     /// Allocates a new difference logic variable.
@@ -391,14 +391,14 @@ impl SeMiTONE {
                     Ok(Lit::FALSE)
                 }
             }
-            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => Ok(self.get_or_create_proxy(TheoryConstraint::EnumEq(v.0, *c))),
+            (EnumExpr::Var(v), EnumExpr::Const(c)) | (EnumExpr::Const(c), EnumExpr::Var(v)) => Ok(self.get_or_create_proxy(TheoryConstraint::EnumEq(*v, *c))),
             (EnumExpr::Var(v1), EnumExpr::Var(v2)) => {
                 if v1 == v2 {
                     return Ok(Lit::TRUE);
                 }
 
-                let domain1 = self.enum_theory.initial_domains[v1.0].clone();
-                let domain2 = self.enum_theory.initial_domains[v2.0].clone();
+                let domain1 = self.enum_theory.initial_domain(*v1);
+                let domain2 = self.enum_theory.initial_domain(*v2);
                 let common: Vec<usize> = domain1.intersection(&domain2).copied().collect();
 
                 if common.is_empty() {
@@ -408,8 +408,8 @@ impl SeMiTONE {
                 let mut clauses = Vec::new();
                 let mut lits = Vec::with_capacity(common.len());
                 for val in common {
-                    let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v1.0, val));
-                    let p2 = self.get_or_create_proxy(TheoryConstraint::EnumEq(v2.0, val));
+                    let p1 = self.get_or_create_proxy(TheoryConstraint::EnumEq(*v1, val));
+                    let p2 = self.get_or_create_proxy(TheoryConstraint::EnumEq(*v2, val));
 
                     match (self.get_lit_val_and_level(p1), self.get_lit_val_and_level(p2)) {
                         (Some((false, 0)), _) | (_, Some((false, 0))) => continue,
@@ -715,7 +715,7 @@ impl SeMiTONE {
             EnumExpr::Const(_) => panic!("Cannot decide on a constant value"),
         };
 
-        let lit = self.get_or_create_proxy(TheoryConstraint::EnumEq(var.0, value));
+        let lit = self.get_or_create_proxy(TheoryConstraint::EnumEq(var, value));
         self.decide(lit)
     }
 
@@ -1157,13 +1157,13 @@ impl SeMiTONE {
         }
     }
 
-    /// Returns the concrete value of an enum variable if it has been fully assigned.
-    pub fn get_enum_val(&self, expr: &EnumExpr) -> Option<usize> {
-        match expr {
+    /// Returns the current value of an enum expression when it is fixed by the model.
+    pub fn get_enum_val(&self, expr: impl AsRef<EnumExpr>) -> Option<usize> {
+        match expr.as_ref() {
             EnumExpr::Const(c) => Some(*c),
             EnumExpr::Var(v) => {
-                let domain = &self.enum_theory.active_domains[v.0];
-                if domain.len() == 1 { domain.iter().next().copied() } else { None }
+                let domain = self.enum_theory.domain(*v);
+                (domain.len() == 1).then(|| *domain.iter().next().unwrap())
             }
         }
     }

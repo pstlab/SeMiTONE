@@ -1,31 +1,57 @@
 use crate::sat_solver::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::{
+    fmt,
+    ops::{Index, IndexMut},
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EnumVar(usize);
+
+impl<T> Index<EnumVar> for Vec<T> {
+    type Output = T;
+    fn index(&self, var: EnumVar) -> &Self::Output {
+        &self[var.0]
+    }
+}
+
+impl<T> IndexMut<EnumVar> for Vec<T> {
+    fn index_mut(&mut self, var: EnumVar) -> &mut Self::Output {
+        &mut self[var.0]
+    }
+}
+
+impl fmt::Display for EnumVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "e{}", self.0)
+    }
+}
 
 pub(super) struct EnumTheory {
-    pub(super) initial_domains: Vec<FxHashSet<usize>>,
-    pub(super) active_domains: Vec<FxHashSet<usize>>,
+    pub(super) initial_domain: Vec<FxHashSet<usize>>,
+    pub(super) active_domain: Vec<FxHashSet<usize>>,
 
-    trail: Vec<(usize, usize)>,
+    trail: Vec<(EnumVar, usize)>,
     trail_lim: Vec<usize>,
 
-    removal_reasons: FxHashMap<(usize, usize), Lit>,
+    removal_reasons: FxHashMap<(EnumVar, usize), Lit>,
 }
 
 impl EnumTheory {
     pub(super) fn new() -> Self {
         Self {
-            initial_domains: Vec::new(),
-            active_domains: Vec::new(),
+            initial_domain: Vec::new(),
+            active_domain: Vec::new(),
             trail: Vec::new(),
             trail_lim: Vec::new(),
             removal_reasons: FxHashMap::default(),
         }
     }
 
-    pub(super) fn mk_var(&mut self, domain: FxHashSet<usize>) -> usize {
-        let id = self.initial_domains.len();
-        self.initial_domains.push(domain.clone());
-        self.active_domains.push(domain);
+    pub(super) fn mk_var(&mut self, domain: FxHashSet<usize>) -> EnumVar {
+        let id = EnumVar(self.initial_domain.len());
+        self.initial_domain.push(domain.clone());
+        self.active_domain.push(domain);
         id
     }
 
@@ -41,14 +67,14 @@ impl EnumTheory {
         let target_len = self.trail_lim[level];
         while self.trail.len() > target_len {
             let (var, val) = self.trail.pop().expect("Enum trail underflow");
-            self.active_domains[var].insert(val);
+            self.active_domain[var].insert(val);
             self.removal_reasons.remove(&(var, val));
         }
         self.trail_lim.truncate(level);
     }
 
-    pub(super) fn set_eq(&mut self, lit: Option<Lit>, var: usize, val: usize) -> Result<bool, Vec<Lit>> {
-        if !self.active_domains[var].contains(&val) {
+    pub(super) fn set_eq(&mut self, lit: Option<Lit>, var: EnumVar, val: usize) -> Result<bool, Vec<Lit>> {
+        if !self.active_domain[var].contains(&val) {
             let mut conflict = Vec::with_capacity(2);
             if let Some(l) = lit {
                 conflict.push(!l);
@@ -59,14 +85,14 @@ impl EnumTheory {
             return Err(conflict);
         }
 
-        let to_remove: Vec<usize> = self.active_domains[var].iter().filter(|&&v| v != val).copied().collect();
+        let to_remove: Vec<usize> = self.active_domain[var].iter().filter(|&&v| v != val).copied().collect();
 
         if to_remove.is_empty() {
             return Ok(false);
         }
 
         for v in to_remove {
-            self.active_domains[var].remove(&v);
+            self.active_domain[var].remove(&v);
             self.trail.push((var, v));
             if let Some(l) = lit {
                 self.removal_reasons.insert((var, v), l);
@@ -75,24 +101,24 @@ impl EnumTheory {
         Ok(true)
     }
 
-    pub(super) fn set_neq(&mut self, lit: Option<Lit>, var: usize, val: usize) -> Result<bool, Vec<Lit>> {
-        if !self.active_domains[var].contains(&val) {
+    pub(super) fn set_neq(&mut self, lit: Option<Lit>, var: EnumVar, val: usize) -> Result<bool, Vec<Lit>> {
+        if !self.active_domain[var].contains(&val) {
             return Ok(false); // Already removed
         }
 
-        self.active_domains[var].remove(&val);
+        self.active_domain[var].remove(&val);
         self.trail.push((var, val));
         if let Some(l) = lit {
             self.removal_reasons.insert((var, val), l);
         }
 
-        if self.active_domains[var].is_empty() {
+        if self.active_domain[var].is_empty() {
             let mut conflict = Vec::new();
             if let Some(l) = lit {
                 conflict.push(!l);
             }
 
-            for &v in &self.initial_domains[var] {
+            for &v in &self.initial_domain[var] {
                 if v != val
                     && let Some(&reason) = self.removal_reasons.get(&(var, v))
                     && !conflict.contains(&!reason)
@@ -104,13 +130,21 @@ impl EnumTheory {
         }
         Ok(true)
     }
+
+    pub(super) fn initial_domain(&self, var: EnumVar) -> &FxHashSet<usize> {
+        &self.initial_domain[var]
+    }
+
+    pub(super) fn domain(&self, var: EnumVar) -> &FxHashSet<usize> {
+        &self.active_domain[var]
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn setup_enum() -> (EnumTheory, usize) {
+    fn setup_enum() -> (EnumTheory, EnumVar) {
         let mut theory = EnumTheory::new();
         let domain: FxHashSet<usize> = vec![1, 2, 3].into_iter().collect();
         let var = theory.mk_var(domain);
@@ -165,8 +199,8 @@ mod tests {
         let lit_set_2 = Lit::new(2, false);
 
         assert_eq!(theory.set_eq(Some(lit_set_1), var, 1), Ok(true));
-        assert_eq!(theory.active_domains[var].len(), 1);
-        assert!(theory.active_domains[var].contains(&1));
+        assert_eq!(theory.active_domain[var].len(), 1);
+        assert!(theory.active_domain[var].contains(&1));
 
         let res_set_2 = theory.set_eq(Some(lit_set_2), var, 2);
         assert!(res_set_2.is_err());
@@ -185,11 +219,11 @@ mod tests {
         theory.push();
 
         assert_eq!(theory.set_neq(Some(lit1), var, 1), Ok(true));
-        assert_eq!(theory.active_domains[var].len(), 2);
+        assert_eq!(theory.active_domain[var].len(), 2);
 
         theory.cancel_until(0);
 
-        assert_eq!(theory.active_domains[var].len(), 3);
+        assert_eq!(theory.active_domain[var].len(), 3);
         assert!(!theory.removal_reasons.contains_key(&(var, 1)));
 
         assert_eq!(theory.set_neq(Some(lit1), var, 1), Ok(true));
