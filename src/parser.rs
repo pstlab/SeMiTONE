@@ -328,6 +328,16 @@ impl<'a> SmtParser<'a> {
                         }
                         Ok(function.result.clone())
                     }
+                    "to_real" => {
+                        if arguments.len() != 1 {
+                            return Err("to_real expects exactly one argument".to_string());
+                        }
+                        let sort = self.term_sort(&arguments[0])?;
+                        if sort != "Int" {
+                            return Err(format!("to_real expects Int, got {sort}"));
+                        }
+                        Ok("Real".to_string())
+                    }
                     _ => Err(format!("Unsupported operator: {op}")),
                 }
             }
@@ -535,6 +545,10 @@ impl<'a> SmtParser<'a> {
                             }
                         }
                     }
+                    "to_real" => {
+                        assert_eq!(args.len(), 1, "to_real expects exactly one argument");
+                        args.into_iter().next().unwrap()
+                    }
                     _ => panic!("Unsupported arithmetic operator: {}", op),
                 }
             }
@@ -653,7 +667,7 @@ impl<'a> SmtParser<'a> {
             }
             concrete::Term::Application { qual_identifier, .. } => {
                 let op = Self::symbol_of_qual_identifier(qual_identifier);
-                matches!(op, "+" | "-" | "*" | "/")
+                matches!(op, "+" | "-" | "*" | "/" | "to_real")
             }
             _ => false,
         }
@@ -853,8 +867,8 @@ mod tests {
         assert_eq!(lines[0].trim(), "unsat");
         assert_eq!(lines[1].trim(), "sat");
     }
-    #[test]
 
+    #[test]
     fn test_euf_arith_mixed_vars() {
         let script = "
             (set-logic QF_UFLIA)
@@ -954,6 +968,24 @@ mod tests {
             (check-sat)
         ";
         assert_eq!(run_smt_script(script).trim(), "unsat", "There are no integer solutions to the system 3x + y = 7 and 3x + y = 8");
+    }
+
+    #[test]
+    fn test_euf_mixed_int_real_bridge() {
+        let script = "
+        (set-logic QF_UFLIRA)
+        (declare-sort U 0)
+        (declare-fun x () Int)
+        (declare-fun y () Real)
+        (declare-fun f (Real) U)
+
+        (assert (= x 2))
+        (assert (= y 2.0))
+        (assert (= (to_real x) y))
+        (assert (not (= (f (to_real x)) (f y))))
+        (check-sat)
+    ";
+        assert_eq!(run_smt_script(script).trim(), "unsat");
     }
 
     #[test]
