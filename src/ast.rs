@@ -1,23 +1,5 @@
-use crate::{enum_theory::EnumVar, sat_solver::BoolVar};
+use crate::{enum_theory::EnumVar, lra_theory::ArithVar, sat_solver::BoolVar};
 use std::{fmt, ops};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntVar(pub(crate) usize);
-
-impl fmt::Display for IntVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "i{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RealVar(pub(crate) usize);
-
-impl fmt::Display for RealVar {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "r{}", self.0)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DlVar(pub(crate) usize);
@@ -301,9 +283,9 @@ pub enum ArithExpr {
     /// A rational constant.
     Const(rug::Rational),
     /// An integer variable allocated by [`crate::SeMiTONE::new_int`].
-    IntVar(IntVar),
+    IntVar(ArithVar),
     /// A real variable allocated by [`crate::SeMiTONE::new_real`].
-    RealVar(RealVar),
+    RealVar(ArithVar),
     /// A sum of arithmetic terms.
     Add(Vec<ArithExpr>),
     /// A product of arithmetic terms.
@@ -665,7 +647,7 @@ pub fn max(z: ArithExpr, args: impl IntoIterator<Item = ArithExpr>) -> BoolExpr 
 
 #[cfg(test)]
 mod tests {
-    use crate::SatSolver;
+    use crate::{LraTheory, SatSolver};
 
     use super::*;
 
@@ -711,10 +693,13 @@ mod tests {
 
     #[test]
     fn bool_display_comparisons() {
-        assert_eq!(BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 < i1");
-        assert_eq!(BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 ≤ i1");
-        assert_eq!(BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 ≥ i1");
-        assert_eq!(BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))).to_string(), "i0 > i1");
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        assert_eq!(BoolExpr::Lt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)).to_string(), "x0 < x1");
+        assert_eq!(BoolExpr::Le(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)).to_string(), "x0 ≤ x1");
+        assert_eq!(BoolExpr::Ge(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)).to_string(), "x0 ≥ x1");
+        assert_eq!(BoolExpr::Gt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)).to_string(), "x0 > x1");
     }
 
     #[test]
@@ -735,32 +720,51 @@ mod tests {
 
     #[test]
     fn arith_display_int_real() {
-        assert_eq!(ArithExpr::IntVar(IntVar(2)).to_string(), "i2");
-        assert_eq!(ArithExpr::RealVar(RealVar(5)).to_string(), "r5");
+        let mut lra = LraTheory::new();
+        let _ = lra.mk_int();
+        let _ = lra.mk_int();
+        let x2 = lra.mk_int();
+        let _ = lra.mk_real();
+        let _ = lra.mk_real();
+        let x5 = lra.mk_real();
+        assert_eq!(ArithExpr::IntVar(x2).to_string(), "x2");
+        assert_eq!(ArithExpr::RealVar(x5).to_string(), "x5");
     }
 
     #[test]
     fn arith_display_add() {
-        let e = ArithExpr::IntVar(IntVar(0)) + ArithExpr::IntVar(IntVar(1));
-        assert_eq!(e.to_string(), "(i0 + i1)");
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let e = ArithExpr::IntVar(x0) + ArithExpr::IntVar(x1);
+        assert_eq!(e.to_string(), "(x0 + x1)");
     }
 
     #[test]
     fn arith_display_sub() {
-        let e = ArithExpr::IntVar(IntVar(0)) - ArithExpr::IntVar(IntVar(1));
-        assert_eq!(e.to_string(), "(i0 - i1)");
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let e = ArithExpr::IntVar(x0) - ArithExpr::IntVar(x1);
+        assert_eq!(e.to_string(), "(x0 - x1)");
     }
 
     #[test]
     fn arith_display_mul() {
-        let e = ArithExpr::IntVar(IntVar(0)) * ArithExpr::IntVar(IntVar(1));
-        assert_eq!(e.to_string(), "(i0 * i1)");
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let e = ArithExpr::IntVar(x0) * ArithExpr::IntVar(x1);
+        assert_eq!(e.to_string(), "(x0 * x1)");
     }
 
     #[test]
     fn arith_display_div() {
-        let e = ArithExpr::Div(Box::new(ArithExpr::IntVar(IntVar(0))), Box::new(ArithExpr::IntVar(IntVar(1))));
-        assert_eq!(e.to_string(), "(i0 / i1)");
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let e = ArithExpr::Div(Box::new(ArithExpr::IntVar(x0)), Box::new(ArithExpr::IntVar(x1)));
+        assert_eq!(e.to_string(), "(x0 / x1)");
     }
 
     // --- push_negations ---
@@ -841,26 +845,38 @@ mod tests {
 
     #[test]
     fn push_negations_not_lt_becomes_ge() {
-        let expr = !BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
-        assert_eq!(push_negations(&expr), BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let expr = !BoolExpr::Lt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1));
+        assert_eq!(push_negations(&expr), BoolExpr::Ge(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)));
     }
 
     #[test]
     fn push_negations_not_le_becomes_gt() {
-        let expr = !BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
-        assert_eq!(push_negations(&expr), BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let expr = !BoolExpr::Le(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1));
+        assert_eq!(push_negations(&expr), BoolExpr::Gt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)));
     }
 
     #[test]
     fn push_negations_not_ge_becomes_lt() {
-        let expr = !BoolExpr::Ge(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
-        assert_eq!(push_negations(&expr), BoolExpr::Lt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let expr = !BoolExpr::Ge(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1));
+        assert_eq!(push_negations(&expr), BoolExpr::Lt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)));
     }
 
     #[test]
     fn push_negations_not_gt_becomes_le() {
-        let expr = !BoolExpr::Gt(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1)));
-        assert_eq!(push_negations(&expr), BoolExpr::Le(ArithExpr::IntVar(IntVar(0)), ArithExpr::IntVar(IntVar(1))));
+        let mut lra = LraTheory::new();
+        let x0 = lra.mk_int();
+        let x1 = lra.mk_int();
+        let expr = !BoolExpr::Gt(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1));
+        assert_eq!(push_negations(&expr), BoolExpr::Le(ArithExpr::IntVar(x0), ArithExpr::IntVar(x1)));
     }
 
     #[test]

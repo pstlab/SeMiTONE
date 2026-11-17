@@ -24,11 +24,11 @@ mod sat_solver;
 pub mod solver;
 
 use crate::{
-    ast::{ArithExpr, BoolExpr, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId, IntVar, RealVar},
+    ast::{ArithExpr, BoolExpr, DlVar, EnumExpr, EufExpr, EufNode, Expr, FuncId},
     dl_theory::DlTheory,
     enum_theory::EnumTheory,
     euf_theory::EufTheory,
-    lra_theory::{LraTheory, SparseRow, tighten_int_bound},
+    lra_theory::{ArithVar, LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
     sat_solver::{BoolVar, Conflict, SatSolver},
@@ -84,12 +84,12 @@ impl SeMiTONE {
 
     /// Allocates a new integer variable.
     pub fn new_int(&mut self) -> ArithExpr {
-        ArithExpr::IntVar(IntVar(self.lra_theory.mk_int()))
+        ArithExpr::IntVar(self.lra_theory.mk_int())
     }
 
     /// Allocates a new real variable.
     pub fn new_real(&mut self) -> ArithExpr {
-        ArithExpr::RealVar(RealVar(self.lra_theory.mk_real()))
+        ArithExpr::RealVar(self.lra_theory.mk_real())
     }
 
     /// Allocates a new enum variable with the given finite domain.
@@ -616,10 +616,10 @@ impl SeMiTONE {
                 *const_term += &*temp;
             }
             ArithExpr::IntVar(var) => {
-                self.accumulate_var(var.0, scale, vars, temp);
+                self.accumulate_var(*var, scale, vars, temp);
             }
             ArithExpr::RealVar(var) => {
-                self.accumulate_var(var.0, scale, vars, temp);
+                self.accumulate_var(*var, scale, vars, temp);
             }
             ArithExpr::Add(terms) => {
                 for term in terms {
@@ -665,7 +665,7 @@ impl SeMiTONE {
         }
     }
 
-    fn accumulate_var(&self, var: usize, scale: &rug::Rational, vars: &mut SparseRow, temp: &mut rug::Rational) {
+    fn accumulate_var(&self, var: ArithVar, scale: &rug::Rational, vars: &mut SparseRow, temp: &mut rug::Rational) {
         if let Some(basic_row) = self.lra_theory.tableau.get(&var) {
             for (sub_var, sub_coeff) in basic_row.iter() {
                 temp.assign(sub_coeff * scale);
@@ -1119,8 +1119,8 @@ impl SeMiTONE {
     pub fn get_arith_val(&self, expr: &ArithExpr) -> Option<InfRational> {
         match expr {
             ArithExpr::Const(c) => Some(InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0))),
-            ArithExpr::IntVar(v) => Some(self.lra_theory.value(v.0).clone()),
-            ArithExpr::RealVar(v) => Some(self.lra_theory.value(v.0).clone()),
+            ArithExpr::IntVar(v) => Some(self.lra_theory.value(*v).clone()),
+            ArithExpr::RealVar(v) => Some(self.lra_theory.value(*v).clone()),
             ArithExpr::Add(terms) => {
                 let mut sum = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 for term in terms {
@@ -1140,8 +1140,8 @@ impl SeMiTONE {
                 let val = InfRational::new(Rational::Finite(c.clone()), rug::Rational::from(0));
                 Some((val.clone(), val))
             }
-            ArithExpr::IntVar(v) => Some((self.lra_theory.lb(v.0).clone(), self.lra_theory.ub(v.0).clone())),
-            ArithExpr::RealVar(v) => Some((self.lra_theory.lb(v.0).clone(), self.lra_theory.ub(v.0).clone())),
+            ArithExpr::IntVar(v) => Some((self.lra_theory.lb(*v).clone(), self.lra_theory.ub(*v).clone())),
+            ArithExpr::RealVar(v) => Some((self.lra_theory.lb(*v).clone(), self.lra_theory.ub(*v).clone())),
             ArithExpr::Add(terms) => {
                 let mut sum_lb = InfRational::new(Rational::Finite(rug::Rational::from(0)), rug::Rational::from(0));
                 let mut sum_ub = sum_lb.clone();
@@ -1276,12 +1276,6 @@ impl SeMiTONE {
     pub fn simplify(&mut self) -> bool {
         self.sat_solver.simplify_db()
     }
-}
-
-#[cold]
-#[inline(never)]
-pub(crate) fn out_of_bounds(var: usize) -> ! {
-    panic!("variable index out of bounds: {}", var);
 }
 
 #[cfg(test)]

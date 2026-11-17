@@ -1,24 +1,50 @@
 use crate::{
-    TheoryConstraint, out_of_bounds,
+    TheoryConstraint,
     rational::{InfRational, Rational},
     sat_solver::Lit,
 };
 use rug::Assign;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::{collections::BTreeMap, mem};
+use std::{
+    collections::BTreeMap,
+    fmt, mem,
+    ops::{Index, IndexMut},
+};
 use tracing::trace;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ArithVar(usize);
+
+impl<T> Index<ArithVar> for Vec<T> {
+    type Output = T;
+    fn index(&self, var: ArithVar) -> &Self::Output {
+        &self[var.0]
+    }
+}
+
+impl<T> IndexMut<ArithVar> for Vec<T> {
+    fn index_mut(&mut self, var: ArithVar) -> &mut Self::Output {
+        &mut self[var.0]
+    }
+}
+
+impl fmt::Display for ArithVar {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "x{}", self.0)
+    }
+}
+
 pub(super) struct LraTheory {
-    ints: Vec<bool>,                                      // true = integer variable, false = real variable
-    reals: Vec<InfRational>,                              // Current assignments
-    pub(super) lbs: Vec<(Option<Lit>, InfRational)>,      // Current lower bounds
-    pub(super) ubs: Vec<(Option<Lit>, InfRational)>,      // Current upper bounds
-    pub(super) lin_to_slack: FxHashMap<SparseRow, usize>, // Mapping from linear constraints to their slack variable
-    pub(super) tableau: BTreeMap<usize, SparseRow>,       // Tableau: basic variable -> linear expression over non-basic variables
-    pub(super) t_watches: Vec<FxHashSet<usize>>,          // For each variable, the set of tableau rows containing it
-    bound_trail: Vec<BoundUpdate>,                        // Trail of bound updates for backtracking
-    trail_lim: Vec<usize>,                                // Trail limits
-    rational_pool: Vec<rug::Rational>,                    // Pool of rational numbers for reuse
+    ints: Vec<bool>,                                         // true = integer variable, false = real variable
+    reals: Vec<InfRational>,                                 // Current assignments
+    pub(super) lbs: Vec<(Option<Lit>, InfRational)>,         // Current lower bounds
+    pub(super) ubs: Vec<(Option<Lit>, InfRational)>,         // Current upper bounds
+    pub(super) lin_to_slack: FxHashMap<SparseRow, ArithVar>, // Mapping from linear constraints to their slack variable
+    pub(super) tableau: BTreeMap<ArithVar, SparseRow>,       // Tableau: basic variable -> linear expression over non-basic variables
+    pub(super) t_watches: Vec<FxHashSet<ArithVar>>,          // For each variable, the set of tableau rows containing it
+    bound_trail: Vec<BoundUpdate>,                           // Trail of bound updates for backtracking
+    trail_lim: Vec<usize>,                                   // Trail limits
+    rational_pool: Vec<rug::Rational>,                       // Pool of rational numbers for reuse
 }
 
 impl LraTheory {
@@ -38,18 +64,18 @@ impl LraTheory {
     }
 
     /// Creates a new integer variable and returns its index.
-    pub(super) fn mk_int(&mut self) -> usize {
+    pub(super) fn mk_int(&mut self) -> ArithVar {
         self.mk_var(true)
     }
 
     /// Creates a new real variable and returns its index.
-    pub(super) fn mk_real(&mut self) -> usize {
+    pub(super) fn mk_real(&mut self) -> ArithVar {
         self.mk_var(false)
     }
 
     /// Creates a new variable (integer or real) and returns its index.
-    fn mk_var(&mut self, is_int: bool) -> usize {
-        let var = self.reals.len();
+    fn mk_var(&mut self, is_int: bool) -> ArithVar {
+        let var = ArithVar(self.reals.len());
         trace!("Creating new variable {}{var}", if is_int { "i" } else { "r" });
         self.ints.push(is_int);
         self.reals.push(InfRational::zero());
@@ -60,7 +86,7 @@ impl LraTheory {
     }
 
     /// Checks if a variable is an integer variable.
-    pub fn is_int_var(&self, var: usize) -> bool {
+    pub fn is_int_var(&self, var: ArithVar) -> bool {
         self.ints[var]
     }
 
@@ -70,8 +96,8 @@ impl LraTheory {
     }
 
     #[inline]
-    pub(super) fn value(&self, var: usize) -> &InfRational {
-        self.reals.get(var).unwrap_or_else(|| out_of_bounds(var))
+    pub(super) fn value(&self, var: ArithVar) -> &InfRational {
+        &self.reals[var]
     }
 
     fn row_value(&self, row: &SparseRow) -> InfRational {
@@ -81,7 +107,7 @@ impl LraTheory {
         })
     }
 
-    pub(super) fn get_or_create_slack(&mut self, vars: SparseRow) -> usize {
+    pub(super) fn get_or_create_slack(&mut self, vars: SparseRow) -> ArithVar {
         if let Some(&slack) = self.lin_to_slack.get(&vars) {
             return slack;
         }
@@ -101,18 +127,18 @@ impl LraTheory {
     }
 
     #[inline]
-    pub(super) fn lb(&self, var: usize) -> &InfRational {
-        &self.lbs.get(var).unwrap_or_else(|| out_of_bounds(var)).1
+    pub(super) fn lb(&self, var: ArithVar) -> &InfRational {
+        &self.lbs[var].1
     }
 
     #[inline]
-    pub(super) fn ub(&self, var: usize) -> &InfRational {
-        &self.ubs.get(var).unwrap_or_else(|| out_of_bounds(var)).1
+    pub(super) fn ub(&self, var: ArithVar) -> &InfRational {
+        &self.ubs[var].1
     }
 
-    pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: usize, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
+    pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: ArithVar, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
         trace!("{}{}{} ≥ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_lb);
-        assert!(var < self.reals.len(), "variable index out of bounds: {var}");
+        assert!(var.0 < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_lb <= self.lb(var) {
             return Ok(false);
@@ -132,9 +158,9 @@ impl LraTheory {
         Ok(true)
     }
 
-    pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: usize, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
+    pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: ArithVar, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
         trace!("{}{}{} ≤ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_ub);
-        assert!(var < self.reals.len(), "variable index out of bounds: {var}");
+        assert!(var.0 < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {
             return Ok(false);
@@ -154,12 +180,12 @@ impl LraTheory {
         Ok(true)
     }
 
-    fn is_basic(&self, var: usize) -> bool {
+    fn is_basic(&self, var: ArithVar) -> bool {
         self.tableau.contains_key(&var)
     }
 
-    fn update(&mut self, var: usize, new_value: InfRational) {
-        assert!(var < self.reals.len(), "variable index out of bounds: {var}");
+    fn update(&mut self, var: ArithVar, new_value: InfRational) {
+        assert!(var.0 < self.reals.len(), "variable index out of bounds: {var}");
         assert!(!self.is_basic(var), "cannot directly update a basic variable");
         assert!(&new_value >= self.lb(var) && &new_value <= self.ub(var), "new value must be within bounds");
 
@@ -170,7 +196,7 @@ impl LraTheory {
             return;
         }
 
-        let watched_rows: Vec<usize> = self.t_watches[var].iter().copied().collect();
+        let watched_rows: Vec<ArithVar> = self.t_watches[var].iter().copied().collect();
         for row_var in watched_rows {
             let coeff = self.tableau[&row_var].get(&var).expect("watched variable must occur in tableau row").clone();
             let delta = &delta_var * &coeff;
@@ -237,13 +263,13 @@ impl LraTheory {
         conflict.dedup();
     }
 
-    fn pivot(&mut self, entering: usize, leaving: usize) {
-        assert!(entering < self.reals.len(), "variable index out of bounds: {entering}");
-        assert!(leaving < self.reals.len(), "variable index out of bounds: {leaving}");
+    fn pivot(&mut self, entering: ArithVar, leaving: ArithVar) {
+        assert!(entering.0 < self.reals.len(), "variable index out of bounds: {entering}");
+        assert!(leaving.0 < self.reals.len(), "variable index out of bounds: {leaving}");
         assert!(self.is_basic(leaving), "leaving variable must be basic");
         assert!(!self.is_basic(entering), "entering variable must be non-basic");
 
-        let leaving_row_vars: Vec<usize> = self.tableau[&leaving].keys().copied().collect();
+        let leaving_row_vars: Vec<ArithVar> = self.tableau[&leaving].keys().copied().collect();
         for var in leaving_row_vars {
             self.t_watches[var].remove(&leaving);
         }
@@ -259,7 +285,7 @@ impl LraTheory {
 
         new_row.insert(leaving, pivot_coeff.recip());
 
-        let affected_rows: Vec<usize> = mem::take(&mut self.t_watches[entering]).into_iter().collect();
+        let affected_rows: Vec<ArithVar> = mem::take(&mut self.t_watches[entering]).into_iter().collect();
 
         for row_var in affected_rows {
             if row_var == leaving {
@@ -283,9 +309,9 @@ impl LraTheory {
     }
 
     /// Updates the values of the variables after a pivot operation.
-    fn pivot_and_update(&mut self, entering: usize, leaving: usize, new_value: InfRational) {
-        assert!(entering < self.reals.len(), "variable index out of bounds: {entering}");
-        assert!(leaving < self.reals.len(), "variable index out of bounds: {leaving}");
+    fn pivot_and_update(&mut self, entering: ArithVar, leaving: ArithVar, new_value: InfRational) {
+        assert!(entering.0 < self.reals.len(), "variable index out of bounds: {entering}");
+        assert!(leaving.0 < self.reals.len(), "variable index out of bounds: {leaving}");
         assert!(self.is_basic(leaving), "leaving variable must be basic");
         assert!(!self.is_basic(entering), "entering variable must be non-basic");
         assert!(&new_value >= self.lb(leaving) && &new_value <= self.ub(leaving), "new value for leaving variable must be within bounds");
@@ -298,7 +324,7 @@ impl LraTheory {
         self.reals[leaving] = new_value;
         self.reals[entering] += &theta;
 
-        let affected_rows: Vec<usize> = self.t_watches[entering].iter().copied().collect();
+        let affected_rows: Vec<ArithVar> = self.t_watches[entering].iter().copied().collect();
         for row_var in affected_rows {
             if row_var == leaving {
                 continue;
@@ -317,12 +343,12 @@ impl LraTheory {
     }
 
     /// Checks if all integer variables have integer values.
-    pub(super) fn check_ints(&self) -> Result<(), (usize, InfRational)> {
+    pub(super) fn check_ints(&self) -> Result<(), (ArithVar, InfRational)> {
         if let Some((var, val)) = self.ints.iter().enumerate().filter(|(_, is_int)| **is_int).find_map(|(var, _)| {
-            let val = self.value(var);
+            let val = self.value(ArithVar(var));
             (!val.infinitesimal_part().is_zero() || !val.rational_part().is_integer()).then_some((var, val))
         }) {
-            return Err((var, val.clone()));
+            return Err((ArithVar(var), val.clone()));
         }
         Ok(())
     }
@@ -462,7 +488,7 @@ impl LraTheory {
         let mut obj_row = self.canonicalize(objective);
 
         loop {
-            let mut entering: Option<(usize, bool)> = None;
+            let mut entering: Option<(ArithVar, bool)> = None;
             let mut best_magnitude: Option<rug::Rational> = None;
 
             for (v, coeff) in obj_row.iter() {
@@ -490,7 +516,7 @@ impl LraTheory {
             };
 
             let mut best_target: Option<InfRational> = None;
-            let mut leaving: Option<usize> = None;
+            let mut leaving: Option<ArithVar> = None;
             let mut leaving_target: Option<InfRational> = None;
 
             let self_bound = if dir { self.ub(entering_var) } else { self.lb(entering_var) }.clone();
@@ -500,7 +526,7 @@ impl LraTheory {
                 leaving_target = Some(self_bound);
             }
 
-            let watched_rows: Vec<usize> = self.t_watches[entering_var].iter().copied().collect();
+            let watched_rows: Vec<ArithVar> = self.t_watches[entering_var].iter().copied().collect();
             for row_var in watched_rows {
                 let coeff = self.tableau[&row_var].get(&entering_var).expect("watched variable must occur in tableau row");
 
@@ -585,7 +611,7 @@ pub(super) fn tighten_int_bound(mut r: rug::Rational, is_upper: bool, strict: bo
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]
 pub(super) struct SparseRow {
-    pub terms: Vec<(usize, rug::Rational)>,
+    pub terms: Vec<(ArithVar, rug::Rational)>,
 }
 
 impl SparseRow {
@@ -601,33 +627,33 @@ impl SparseRow {
         self.terms.len()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, (usize, rug::Rational)> {
+    pub fn iter(&self) -> std::slice::Iter<'_, (ArithVar, rug::Rational)> {
         self.terms.iter()
     }
 
-    pub fn get(&self, var: &usize) -> Option<&rug::Rational> {
+    pub fn get(&self, var: &ArithVar) -> Option<&rug::Rational> {
         self.terms.binary_search_by_key(var, |&(v, _)| v).ok().map(|idx| &self.terms[idx].1)
     }
 
-    pub fn insert(&mut self, var: usize, coeff: rug::Rational) {
+    pub fn insert(&mut self, var: ArithVar, coeff: rug::Rational) {
         match self.terms.binary_search_by_key(&var, |&(v, _)| v) {
             Ok(idx) => self.terms[idx].1 = coeff,
             Err(idx) => self.terms.insert(idx, (var, coeff)),
         }
     }
 
-    pub fn remove(&mut self, var: &usize) -> Option<rug::Rational> {
+    pub fn remove(&mut self, var: &ArithVar) -> Option<rug::Rational> {
         self.terms.binary_search_by_key(var, |&(v, _)| v).ok().map(|idx| self.terms.remove(idx).1)
     }
 
     pub fn retain<F>(&mut self, mut f: F)
     where
-        F: FnMut(&usize, &mut rug::Rational) -> bool,
+        F: FnMut(&ArithVar, &mut rug::Rational) -> bool,
     {
         self.terms.retain_mut(|(v, c)| f(v, c));
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &usize> {
+    pub fn keys(&self) -> impl Iterator<Item = &ArithVar> {
         self.terms.iter().map(|(v, _)| v)
     }
 
@@ -635,7 +661,7 @@ impl SparseRow {
         self.terms.iter_mut().map(|(_, c)| c)
     }
 
-    pub fn add_coeff(&mut self, var: usize, delta: &rug::Rational) {
+    pub fn add_coeff(&mut self, var: ArithVar, delta: &rug::Rational) {
         if delta.is_zero() {
             return;
         }
@@ -691,7 +717,7 @@ impl SparseRow {
         self.terms = new_terms;
     }
 
-    fn add_scaled(&mut self, other: &SparseRow, scale: &rug::Rational, watches: &mut [FxHashSet<usize>], target_row_var: usize, pool: &mut Vec<rug::Rational>) {
+    fn add_scaled(&mut self, other: &SparseRow, scale: &rug::Rational, watches: &mut [FxHashSet<ArithVar>], target_row_var: ArithVar, pool: &mut Vec<rug::Rational>) {
         let old_terms = std::mem::take(&mut self.terms);
         let mut new_terms = Vec::with_capacity(old_terms.len());
 
@@ -708,7 +734,7 @@ impl SparseRow {
                 delta.assign(c2 * scale);
 
                 if !delta.is_zero() {
-                    watches[*v2].insert(target_row_var);
+                    watches[v2.0].insert(target_row_var);
                     new_terms.push((*v2, delta));
                 } else {
                     pool.push(delta);
@@ -724,7 +750,7 @@ impl SparseRow {
                 pool.push(tmp_delta);
 
                 if c1.is_zero() {
-                    watches[v1].remove(&target_row_var);
+                    watches[v1.0].remove(&target_row_var);
                     pool.push(c1);
                 } else {
                     new_terms.push((v1, c1));
@@ -739,7 +765,7 @@ impl SparseRow {
             delta.assign(c2 * scale);
 
             if !delta.is_zero() {
-                watches[*v2].insert(target_row_var);
+                watches[v2.0].insert(target_row_var);
                 new_terms.push((*v2, delta));
             } else {
                 pool.push(delta);
@@ -751,8 +777,8 @@ impl SparseRow {
 }
 
 impl<'a> IntoIterator for &'a SparseRow {
-    type Item = &'a (usize, rug::Rational);
-    type IntoIter = std::slice::Iter<'a, (usize, rug::Rational)>;
+    type Item = &'a (ArithVar, rug::Rational);
+    type IntoIter = std::slice::Iter<'a, (ArithVar, rug::Rational)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.terms.iter()
@@ -760,8 +786,8 @@ impl<'a> IntoIterator for &'a SparseRow {
 }
 
 enum BoundUpdate {
-    LowerBound { lit: Option<Lit>, var: usize, val: InfRational },
-    UpperBound { lit: Option<Lit>, var: usize, val: InfRational },
+    LowerBound { lit: Option<Lit>, var: ArithVar, val: InfRational },
+    UpperBound { lit: Option<Lit>, var: ArithVar, val: InfRational },
 }
 
 #[cfg(test)]
@@ -769,7 +795,7 @@ mod tests {
     use super::*;
     use crate::SatSolver;
 
-    fn add_test_row(theory: &mut LraTheory, basic_var: usize, terms: &[(usize, i32)]) {
+    fn add_test_row(theory: &mut LraTheory, basic_var: ArithVar, terms: &[(ArithVar, i32)]) {
         let mut row = SparseRow::new();
         for &(var, coeff) in terms {
             row.insert(var, rug::Rational::from(coeff));
@@ -778,7 +804,7 @@ mod tests {
         theory.tableau.insert(basic_var, row);
     }
 
-    fn build_row(terms: &[(usize, i32)]) -> SparseRow {
+    fn build_row(terms: &[(ArithVar, i32)]) -> SparseRow {
         let mut row = SparseRow::new();
         for &(var, coeff) in terms {
             row.insert(var, rug::Rational::from(coeff));
@@ -905,25 +931,25 @@ mod tests {
     fn test_sparse_row_add_scaled_cancellation() {
         let rational_pool = &mut Vec::new();
         // row1 = 2*v0 + 3*v1 - 1*v3
-        let mut row1 = build_row(&[(0, 2), (1, 3), (3, -1)]);
+        let mut row1 = build_row(&[(ArithVar(0), 2), (ArithVar(1), 3), (ArithVar(3), -1)]);
         // row2 = 1*v1 + 4*v2 + 2*v3
-        let row2 = build_row(&[(1, 1), (2, 4), (3, 2)]);
+        let row2 = build_row(&[(ArithVar(1), 1), (ArithVar(2), 4), (ArithVar(3), 2)]);
 
         let mut watches = vec![FxHashSet::default(); 4];
-        let target_row = 10;
+        let target_row = ArithVar(10);
 
-        watches[0].insert(target_row);
-        watches[1].insert(target_row);
-        watches[3].insert(target_row);
+        watches[ArithVar(0)].insert(target_row);
+        watches[ArithVar(1)].insert(target_row);
+        watches[ArithVar(3)].insert(target_row);
 
         let scale = rug::Rational::from(-3);
         row1.add_scaled(&row2, &scale, &mut watches, target_row, rational_pool);
 
         assert_eq!(row1.len(), 3, "The row should have exactly 3 active terms");
-        assert_eq!(row1.get(&0), Some(&rug::Rational::from(2)));
-        assert_eq!(row1.get(&1), None, "v1 should have been removed from the row");
-        assert_eq!(row1.get(&2), Some(&rug::Rational::from(-12)));
-        assert_eq!(row1.get(&3), Some(&rug::Rational::from(-7)));
+        assert_eq!(row1.get(&ArithVar(0)), Some(&rug::Rational::from(2)));
+        assert_eq!(row1.get(&ArithVar(1)), None, "v1 should have been removed from the row");
+        assert_eq!(row1.get(&ArithVar(2)), Some(&rug::Rational::from(-12)));
+        assert_eq!(row1.get(&ArithVar(3)), Some(&rug::Rational::from(-7)));
 
         assert!(watches[0].contains(&target_row), "The watch for v0 should remain unchanged");
         assert!(!watches[1].contains(&target_row), "The watch for v1 should have been removed because the coefficient became zero");
