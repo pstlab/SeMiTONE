@@ -25,16 +25,18 @@ pub mod solver;
 
 use crate::{
     ast::{ArithExpr, BoolExpr, EnumExpr, EufExpr, Expr},
-    dl_theory::{DlTheory, DlVar},
+    dl_theory::DlTheory,
     enum_theory::EnumTheory,
-    euf_theory::{EufTheory, FuncId},
+    euf_theory::EufTheory,
     lra_theory::{ArithVar, LraTheory, SparseRow, tighten_int_bound},
     proxy::{ProxyRegistry, TheoryConstraint},
     rational::{InfRational, Rational},
-    sat_solver::{BoolVar, Conflict, SatSolver},
+    sat_solver::{Conflict, SatSolver},
 };
+pub use dl_theory::DlVar;
+pub use euf_theory::FuncId;
 use rug::Assign;
-pub use sat_solver::Lit;
+pub use sat_solver::{BoolVar, Lit};
 use tracing::trace;
 
 /// Main solver entry point for propositional and theory constraints.
