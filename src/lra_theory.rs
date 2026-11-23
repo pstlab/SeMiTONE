@@ -76,7 +76,7 @@ impl LraTheory {
     /// Creates a new variable (integer or real) and returns its index.
     fn mk_var(&mut self, is_int: bool) -> ArithVar {
         let var = ArithVar(self.reals.len());
-        trace!("Creating new variable {}{var}", if is_int { "i" } else { "r" });
+        trace!("Creating new {} variable{var}", if is_int { "integer" } else { "real" });
         self.ints.push(is_int);
         self.reals.push(InfRational::zero());
         self.lbs.push((None, InfRational::negative_inf()));
@@ -137,7 +137,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_lb(&mut self, lit: Option<Lit>, var: ArithVar, new_lb: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("{}{}{} ≥ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_lb);
+        trace!("{}{} ≥ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_lb);
         assert!(var.0 < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_lb <= self.lb(var) {
@@ -159,7 +159,7 @@ impl LraTheory {
     }
 
     pub(super) fn set_ub(&mut self, lit: Option<Lit>, var: ArithVar, new_ub: InfRational) -> Result<bool, Vec<Lit>> {
-        trace!("{}{}{} ≤ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, if self.is_int_var(var) { "i" } else { "r" }, var, new_ub);
+        trace!("{}{} ≤ {}", if let Some(l) = lit { format!("[{l}] ") } else { "".to_string() }, var, new_ub);
         assert!(var.0 < self.reals.len(), "variable index out of bounds: {var}");
 
         if &new_ub >= self.ub(var) {

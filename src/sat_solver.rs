@@ -222,15 +222,7 @@ impl SatSolver {
             let mut redundant = false;
 
             if let Some(reason_idx) = self.reason[var] {
-                redundant = true;
-                let c = &self.clauses[reason_idx];
-                for k in 1..c.lits.len() {
-                    let v = c.lits[k].var();
-                    if !self.seen[v] && self.level(v).unwrap_or(0) > 0 {
-                        redundant = false; // There is an external dependency
-                        break;
-                    }
-                }
+                redundant = self.clauses[reason_idx].lits[1..].iter().all(|lit| self.seen[lit.var()] || self.level(lit.var()).unwrap_or(0) == 0);
             }
 
             if !redundant {
