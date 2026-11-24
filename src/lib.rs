@@ -36,6 +36,7 @@ use crate::{
 pub use dl_theory::DlVar;
 pub use euf_theory::FuncId;
 use rug::Assign;
+use rustc_hash::FxHashSet;
 pub use sat_solver::{BoolVar, Lit};
 use tracing::trace;
 
@@ -96,7 +97,24 @@ impl SeMiTONE {
 
     /// Allocates a new enum variable with the given finite domain.
     pub fn new_enum(&mut self, domain: impl IntoIterator<Item = usize>) -> EnumExpr {
-        EnumExpr::Var(self.enum_theory.mk_var(domain.into_iter().collect()))
+        let domain_set: FxHashSet<usize> = domain.into_iter().collect();
+        let var = self.enum_theory.mk_var(domain_set.clone());
+
+        let lits: Vec<Lit> = domain_set.into_iter().map(|val| self.get_or_create_proxy(TheoryConstraint::EnumEq(var, val))).collect();
+
+        if !lits.is_empty() {
+            // At-least-one value in the domain must hold (unit-propagates immediately if len == 1)
+            let _ = self.sat_solver.add_clause(lits.iter().copied());
+
+            // At-most-one value in the domain can hold
+            for i in 0..lits.len() {
+                for j in (i + 1)..lits.len() {
+                    let _ = self.sat_solver.add_clause([!lits[i], !lits[j]]);
+                }
+            }
+        }
+
+        EnumExpr::Var(var)
     }
 
     /// Allocates a new difference logic variable.
